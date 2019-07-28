@@ -46,7 +46,8 @@ typedef enum {
 	SVAL_NUM, 
 	SVAL_ERR, 
 	SVAL_SYM, 
-	SVAL_SEXPR
+	SVAL_SEXPR,
+	SVAL_QEXPR
 } sValueType; 
 
 typedef enum {
@@ -93,6 +94,39 @@ sval* sval_sexpr(void) {
 	return v; 
 }
 
+// Q-expr values
+sval* sval_qexpr(void) {
+	sval* v = malloc(sizeof(sval)); 
+	v->type = SVAL_QEXPR;
+	v->count = 0; 
+	v->cell = NULL;
+	return v; 
+}
+
+// free svals 
+void sval_free(sval* v) {
+
+	switch(v->type) {
+		// do nothing special for numbers 
+		case SVAL_NUM: break; 
+
+		// for err or sym, free string data 
+		case SVAL_ERR: free(v->err); break; 
+		case SVAL_SYM: free(v->sym); break; 
+
+		// in the case of an S-Expr, free internal data 
+		case SVAL_SEXPR: 
+		case SVAL_QEXPR:
+			for (int i = 0; i < v->count; i++) {
+				sval_free(v->cell[i]);
+			}
+			free(v->cell); 
+			break; 
+	}
+	// free the struct itself. 
+	free(v); 
+}
+
 // nests one S-Expr inside of another 
 sval* sval_add(sval* v, sval* x) {
 	v->count++; 
@@ -119,39 +153,20 @@ sval* sval_read(mpc_ast_t* t) {
 	sval* x = NULL; 
 	if (strcmp(t->tag, ">") == 0) { x = sval_sexpr(); }
 	if (strstr(t->tag, "sexpr")) 	{ x = sval_sexpr(); }
+	if (strstr(t->tag, "qexpr"))  { x = sval_qexpr(); }
 
 	// fill in the new S-Expr with any valid expressions 
 	for (int i = 0; i < t->children_num; i++) {
 		// weed through any meta-information 
 		if (strcmp(t->children[i]->contents, "(") == 0) {continue;}
 		if (strcmp(t->children[i]->contents, ")") == 0) {continue;}
+		if (strcmp(t->children[i]->contents, "{") == 0) {continue;}
+		if (strcmp(t->children[i]->contents, "}") == 0) {continue;}
 		if (strcmp(t->children[i]->tag,  "regex") == 0) {continue;}
 		x = sval_add(x, sval_read(t->children[i])); 
 	}
 	return x; 
 }
-
-
-// destructing svals 
-void sval_free(sval* v) {
-// debug printf("sval_free() "); 
-	switch (v->type) {
-		// number types have no additional memory to be freed
-		case SVAL_NUM: 
-			break; 
-		case SVAL_ERR: free(v->err); break; 
-		case SVAL_SYM: free(v->sym); break; 
-		// an S-expr requires mo' freein' 
-		case SVAL_SEXPR:
-			for (int i = 0; i < v->count; i++) {
-				sval_free(v->cell[i]); 
-			}
-			free(v->cell); 
-			break; 
-	}
-	free(v); 	// free the structure itself, too. 
-}
-
 
 // helpers 
 
@@ -189,6 +204,7 @@ void sval_print(sval* v) {
 		case SVAL_ERR: 		printf("Error: %s", v->err);  break; 
 		case SVAL_SYM: 		printf("%s", v->sym); 			  break; 
 		case SVAL_SEXPR:  sval_expr_print(v, '(', ')'); break; 
+		case SVAL_QEXPR:  sval_expr_print(v, '{', '}'); break; 
 	}
 }
 
@@ -202,6 +218,7 @@ sval* sval_eval(sval* v);
 sval* sval_pop(sval* v, int i); 
 sval* sval_take(sval* v, int i); 
 sval* builtin_op(sval* v, char* op); 
+sval* builtin(sval* a, char* func); 
 
 sval* sval_eval_sexpr(sval* v) {
 	// debug printf("sval_eval_sexpr() "); 
@@ -229,7 +246,7 @@ sval* sval_eval_sexpr(sval* v) {
 	}
 
 	// pass expression and arguments to builtin 
-	sval* result = builtin_op(v, f->sym); 
+	sval* result = builtin(v, f->sym); 
 	sval_free(f); 
 	return result; 
 }
@@ -263,7 +280,7 @@ sval* sval_pop(sval* v, int i) {
 // extracts an elment and then deletes the list it came from 
 // perhaps useful when we hit bottom? 
 sval* sval_take(sval* v, int i) {
-	sval* x = v->cell[i]; 
+	sval* x = sval_pop(v, i); 
 	sval_free(v); 
 	return x; 
 }
@@ -314,27 +331,124 @@ sval* builtin_op(sval* a, char* op) {
 	return x; 
 }
 
+// Q-expr functionality // 
+
+// general-purpose error handler 
+#define ERRCHECK(args, cond, err) \
+	if (!(cond)) { sval_free(args); return sval_err(err); }
+
+sval* builtin_head(sval* a) {
+	ERRCHECK(a, a->count == 1, 
+		"Function 'head' passed too many arguments!"); 
+	ERRCHECK(a, a->cell[0]->type == SVAL_QEXPR, 
+		"Function 'head' passed the incorrect type!"); 
+	ERRCHECK(a, a->cell[0]->count != 0, 
+		"Function 'head' passed { }!"); 
+
+	sval* v = sval_take(a, 0); 
+	// returns only the head of the expression 
+	while (v->count > 1) { sval_free(sval_pop(v, 1)); }
+	return v; 
+}
+
+sval* builtin_tail(sval* a) {
+	ERRCHECK(a, a->count == 1, 
+		"Function 'tail' passed too many arguments!"); 
+	ERRCHECK(a, a->cell[0]->type == SVAL_QEXPR, 
+		"Function 'tail' passed the incorrect type!"); 
+	ERRCHECK(a, a->cell[0]->count != 0, 
+		"Function 'tail' passed { }!");
+	// removes the head of the expression and returns the rest 
+	sval* v = sval_take(a, 0); 
+	sval_free(sval_pop(v, 0)); 
+	return v; 
+}
+
+sval* builtin_list(sval* a) {
+	// simple S->Q conversion 
+	a->type = SVAL_QEXPR; 
+	return a; 
+}
+
+sval* builtin_eval(sval* a) {
+	ERRCHECK(a, a->count == 1, 
+		"Function 'eval' passed too many arguments!"); 
+	ERRCHECK(a, a->cell[0]->type == SVAL_QEXPR, 
+		"Function 'eval' passed the incorrect type!"); 
+	
+	sval* x = sval_take(a, 0); 
+	x->type = SVAL_SEXPR;
+	return sval_eval(x); 
+}
+
+// join functionality needs a helper function, as it can take potentially many 
+// arguments 
+sval* sval_join(sval* x, sval* y) {
+	// add each cell in 'y' to 'x'
+	while (y->count) {
+		x = sval_add(x, sval_pop(y, 0)); 
+	}
+
+	// delete the empty 'y', and return 'x'
+	sval_free(y); 
+	return x; 
+}
+
+sval* builtin_join(sval* a) {
+	// ensure that all arguments are valid 
+	for (int i = 0; i < a->count; i++) {
+		ERRCHECK(a, a->cell[i]->type == SVAL_QEXPR, 
+			"Function 'join' passed the incorrect type!"); 
+	}
+	
+	sval* x = sval_pop(a, 0); 
+
+	while (a->count) {
+		// pop each value and append it to 'x'
+		x = sval_join(x, sval_pop(a, 0)); 
+	}
+
+	// x replaces a as the joined expression 
+	sval_free(a); 
+	return x; 
+}
+
+// swtichboard for builtin functions 
+sval* builtin(sval* a, char* func) {
+  if (strcmp("list", func) == 0) { return builtin_list(a); }
+  if (strcmp("head", func) == 0) { return builtin_head(a); }
+  if (strcmp("tail", func) == 0) { return builtin_tail(a); }
+  if (strcmp("join", func) == 0) { return builtin_join(a); }
+  if (strcmp("eval", func) == 0) { return builtin_eval(a); }
+  if (strstr("+-/*", func)) { return builtin_op(a, func); }
+  sval_free(a);
+  return sval_err("Unknown Function!");
+}
+
 
 int main(int argc, char* argv[]) {
 
 // Create Parsers 
 mpc_parser_t* Number   = mpc_new("number"); 
 mpc_parser_t* Symbol   = mpc_new("symbol");
-mpc_parser_t* Sexpr 	 = mpc_new("sexpr"); 
+mpc_parser_t* Sexpr 	 = mpc_new("sexpr");
+mpc_parser_t* Qexpr 	 = mpc_new("qexpr");  
 mpc_parser_t* Expr     = mpc_new("expr"); 
 mpc_parser_t* Cue 		 = mpc_new("cue"); 
 
 // Define Language 
 mpca_lang(MPCA_LANG_DEFAULT, 
-	"																			   							\
-		number   : /-?[0-9]+/ ; 							 							\
-		symbol   : '+' | '-' | '/' | '*' | '%' | '^' |			\
-								/min/ | /max/ ; 												\
-	  sexpr    : '(' <expr>* ')' ; 												\
-		expr 		 : <number> | <symbol> | <sexpr>  ;					\
-		cue      : /^/ <expr>* /$/ ; 												\
+	"																			   							 \
+		number   : /-?[0-9]+/ ; 							 							 \
+		symbol   : '+' | '-' | '/' | '*' | '%' | '^' |			 \
+								/min/ | /max/ | \"list\" | \"head\" 		 \
+								| \"join\" | \"eval\" | \"tail\" ;       \
+	  sexpr    : '(' <expr>* ')' ; 												 \
+	  qexpr 	 : '{' <expr>* '}' ; 												 \
+		expr 		 : <number> | <symbol> | <sexpr> | <qexpr> ; \
+		cue      : /^/ <expr>* /$/ ; 												 \
 		", 
-		Number, Symbol, Sexpr, Expr, Cue);   
+		Number, Symbol, Sexpr, Qexpr, Expr, Cue);   
 
 
 	// print version and exit information 
@@ -354,24 +468,24 @@ mpca_lang(MPCA_LANG_DEFAULT,
 		mpc_result_t r; 
 		if (mpc_parse("<stdin>", input, Cue, &r)) {
 			// success 
-			//mpc_ast_print(r.output);
+			mpc_ast_print(r.output);
 			sval* x = sval_eval(sval_read(r.output)); 
-			sval_println(x); 
+			sval_println(x);
 			sval_free(x); 
-
 			mpc_ast_delete(r.output); 
-		} else {
+		} 
+		else {
 			// err 
 			mpc_err_print(r.error); 
 			mpc_err_delete(r.error); 
 		}
 
 		// free retrieved input
-		free(input); 
+		//free(input); 
 
 
 	}
 	// undefine and clean up Parsers 
-	mpc_cleanup(5, Number, Symbol, Sexpr, Expr, Cue);
+	mpc_cleanup(6, Number, Symbol, Sexpr, Qexpr, Expr, Cue);
 	return(EXIT_SUCCESS); 
 }
