@@ -9,9 +9,11 @@
  * 
  * TODO: 
  * 			[ ] Refactor and prettify. 
- *			[ ] Convert static arrays to linked lists. 
+ *					[*] First draft done. Need to wring out the bugs. 
+ *					[ ] Test expected behavior and document. 
+ *			[*] Convert static arrays to linked lists. 
  *			[ ] Review how everything actually works. 
- *			[ ] Hot comment boxes for everything 
+ *			[*] Hot comment boxes for everything 
  * 			[ ] Merge this branch with master. 
  */ 
 
@@ -34,11 +36,11 @@ char* readline(char* prompt) {
 	fgets(buffer, MAXLINE, stdin); 
 	char* in = malloc(strlen(buffer)+1); 
 	strcpy(in, buffer); 
-	cpy[strlen(in)-1] = '\0'; 	/* chop newline */ 
+	in[strlen(in)-1] = '\0'; 	/* chop newline */ 
 	return in; 
 }
 
-void add_history(char* reserve) {/* space filler */} 
+void add_history(char* sorry_windows_users) {/* space filler */} 
 
 #else 
 #include <editline/readline.h>
@@ -59,21 +61,12 @@ typedef sval*(*sbuiltin)(env*, sval*);
 
 /* Sub-types */ 
 typedef enum {
-	SVAL_NUM, SVAL_ERR, SVAL_SYM, SVAL_SEXPR, 
-	SVAL_QEXPR, SVAL_FUN
+	SVAL_NUM, SVAL_ERR, SVAL_SYM, SVAL_SEXPR, SVAL_QEXPR, SVAL_FUN
 } value_type; 
 
 typedef enum {
 	ZERO_DIV_ERR, BAD_OP_ERR, BAD_NUM_ERR
 } err_type; 
-
-/* Error handling macros */ 
-#define ERRCHECK(args, cond, fmt, ...) \
-	if (!(cond)) { \
-		sval* err = error(fmt, ##__VA_ARGS__); \
-		free_sval(args); \
-		return err; \
-	}
 
 /* Helper function for type lookup */ 
 char* find_type(value_type t) {
@@ -87,6 +80,29 @@ char* find_type(value_type t) {
 		default: return "???"; 
 	}
 }
+
+/* Error handling macros */ 
+#define ERRCHECK(args, cond, fmt, ...) \
+	if (!(cond)) { \
+		sval* err = error(fmt, ##__VA_ARGS__); \
+		free_sval(args); \
+		return err; \
+	}
+/**
+ * These haven't been properly integrated. On the list 
+ * 
+#define ERRCHECK_TYPE(func, args, index, expect) \
+  ERRCHECK(args, args->cell[index]->type == expect, \
+    "Function '%s' passed incorrect type for argument %i. " \
+    "Got %s, Expected %s.", \
+    func, index, ltype_name(args->cell[index]->type), ltype_name(expect))
+
+#define ERRCHECK_NUM(func, args, num) \
+  ERRCHECK(args, args->count == num, \
+    "Function '%s' passed incorrect number of arguments. " \
+    "Got %i, Expected %i.", \
+    func, args->count, num)
+*/ 
 
 typedef struct sval {
 	value_type type; 
@@ -187,14 +203,26 @@ env* new_env(void) {
 	return e; 
 }
 
+/* Lambda value (user generated fcn) */ 
+sval* lambda(sval* formals, sval* body) {
+	sval* v = malloc(sizeof(sval)); 
+	v->type = SVAL_FUN; 
+	/* null builtin is the signal */ 
+	v->builtin = NULL; 
+	v->env = new_env(); 
+	v->formals = formals; 
+	v->body = body;
+	return v;  
+}
+
 /* Destructors */ 
 void free_env(env* e); 
 void free_sval(sval* v); 
 
 void free_sval(sval* v) {
+	if (!v) { return; }
 
 	switch(v->type) {
-
 		case SVAL_NUM: break;  
 
 		case SVAL_ERR: free(v->err); break; 
@@ -217,13 +245,16 @@ void free_sval(sval* v) {
 }
 
 void free_env(env* e) {
-	for (int i = 0; i < e->count; i++) {
-		free(e->syms[i]); 
-		free_sval(e->vals[i]); 
+	if (e) {
+		printf("calling free_env()\n"); 
+		for (int i = 0; i < e->count; i++) {
+			free(e->syms[i]); 
+			free_sval(e->vals[i]); 
+		}
+		free(e->syms); 
+		free(e->vals); 
+		free(e);
 	}
-	free(e->syms); 
-	free(e->vals); 
-	free(e);
 }
 
 /********************/ 
@@ -289,7 +320,7 @@ env* copy_env(env* e) {
 }
 
 List copy_list(List L) {
-	if (!L) { exit(EXIT_FAILURE); } /* FIXME: Do proper list error handling */ 
+	if (!L) { return newList(); } /* FIXME: Do proper list error handling */ 
 	List C = newList(); 						/* FIXME: Lint List camel-case to GNU std */ 
 	sval* v; 
 	if (length(L) > 0) {
@@ -301,6 +332,16 @@ List copy_list(List L) {
 		}
 	}
 	return C; 
+}
+
+/* S-Expression helper: nests one sexpr inside the other */ 
+sval* sexpr_compose(sval* v, sval* x) {
+	if (!v->children) {
+		v->children = newList(); 
+	}
+	v->count++; 
+	append(v->children, x); 
+	return v; 
 }
 
 /**************************/ 
@@ -368,13 +409,6 @@ sval* make_func(sval* formals, sval* body) {
 /***********************/ 
 /** Reading functions **/
 /***********************/  
-
-/* S-Expression helper: nests one sexpr inside the other */ 
-sval* sexpr_compose(sval* v, sval* x) {
-	v->count++; 
-	append(v->children, x); 
-	return v; 
-}
 
 /* Number reader with error handling */ 
 sval* read_num(mpc_ast_t* t) {
@@ -504,8 +538,10 @@ sval* evaluate_sexpr(env* e, sval* v) {
 	List children = v->children; 
 	if (v->count > 0) { moveFront(children); }
 	for (int i = 0; i < v->count; i++) {
-		sval* child_eval = evaluate(e, get(children)); 
+		sval* child_eval = evaluate(e, get(children));
+		printf("swapping... "); 
 		swap(children, child_eval); 
+		printf(" complete.\n"); 
 		moveNext(children); 
 	}
 
@@ -547,31 +583,6 @@ sval* pop(sval* v, int i) {
 	delete(V); 
 	v->count--; 
 	return x; 
-	/* 
-	sval* x; 
-	if (i == 0 && length(v->children) > 0) {
-		x = (sval*)front(v->children);
-		deleteFront(v->children); 
-		v->count--; 
-		return x; 
-	}
-	
-	if (length(v->children) > 0) {
-		moveFront(v->children); 
-		while (idx(v->children) < i && idx(v->children) != -1) {
-			moveNext(v->children); 
-		}
-		if (idx(v->children) != -1) { 
-			x = (sval*)get(v->children); 
-			delete(v->children);
-			v->count--;  
-			return x; 
-		} else {
-			return error("Henry, your linked list is broken. Fix this."); 
-		}
-	}
-	return error("Unhandled error in sval* pop()"); 
-	*/
 }
 
 /* Take : pops the ith element, and frees the rest */ 
@@ -598,7 +609,7 @@ sval* builtin_op(env* e, sval* a, char* op) {
 
 	/* Verify that input are numbers */ 
 	List A = a->children; 
-	if (length(A) > 0) {
+	if (A && length(A) > 0) {
 		moveFront(A);
 		while (idx(A) >= 0) {
 			if (((sval*)get(A))->type != SVAL_NUM) {
@@ -708,7 +719,7 @@ sval* join_helper(sval* x, sval* y) {
 sval* builtin_join(env* e, sval* a) {
 	List A = a->children; 
 	/* Validate args */ 
-	if (length(A) > 0) {
+	if (A && length(A) > 0) {
 		moveFront(A); 
 		while (idx(A) >= 0) {
 			ERRCHECK(a, ((sval*)get(A))->type == SVAL_QEXPR, 
@@ -770,7 +781,7 @@ sval* set_var(env* e, sval* a, char* func) {
 	List S = symbols->children; 
 	List A = a->children; 
 	/* Verify name */ 
-	if (length(S) > 0) {
+	if (S && length(S) > 0) {
 		moveFront(S); 
 		while (idx(S) >= 0) {
 			ERRCHECK(a, ((sval*)get(S))->type == SVAL_SYM, 
@@ -786,7 +797,7 @@ sval* set_var(env* e, sval* a, char* func) {
 		"Got %i, expecting %i.", func, symbols->count, a->count -1); 
 
 	/* "def" sets global bindings, "=" is a local binding */ 
-	moveFront(S); moveFront(A); moveFront(A); /* Advance A one past S */ 
+	moveFront(S); moveFront(A); moveNext(A); /* Advance A one past S */ 
 	for (int i = 0; i < symbols->count; i++) {
 		if (strcmp(func, "def") == 0) {
 			def_env(e, (sval*)get(S), (sval*)get(A)); 
@@ -804,8 +815,10 @@ sval* set_var(env* e, sval* a, char* func) {
 
 /* Defines user-entered functions */ 
 sval* builtin_lambda(env* e, sval* a) {
-	List A = a->children; 
-	if (length(A) > 0) {
+
+	/* PRE: exactly two arguments, both qexpr. TODO: IMPLEMENT */
+	List A = ((sval*)front(a->children))->children; /* first qexpr arg */ 
+	if (A && length(A) > 0) {
 		moveFront(A); 
 		while (idx(A) >= 0) {
 			ERRCHECK(a, ((sval*)get(A))->type == SVAL_SYM, 
@@ -821,7 +834,7 @@ sval* builtin_lambda(env* e, sval* a) {
 	sval* body 		= pop(a, 0); 
 	free_sval(a); 
 
-	return make_func(formals, body); 
+	return lambda(formals, body); 
 }
 
 /* Call: Evaluates a function, either user-defined or global */ 
@@ -900,6 +913,7 @@ sval* call(env* e, sval* f, sval* a) {
 
 /* Put and define register values to the local or global namespace */ 
 sval* builtin_def(env* e, sval* a) {
+	printf("Calling def\n");
 	return set_var(e, a, "def");
 }
 
@@ -948,7 +962,7 @@ int main(int argc, char* argv[]) {
 	mpca_lang(MPCA_LANG_DEFAULT, 
 	"																			   							 \
 		number   : /-?[0-9]+/ ; 							 							 \
-		symbol   : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/ ;				 \
+		symbol   : /[a-zA-Z0-9_+\\-*\\/\\\\=<>%!&]+/ ;				\
 	  sexpr    : '(' <expr>* ')' ; 												 \
 	  qexpr 	 : '{' <expr>* '}' ; 												 \
 		expr 		 : <number> | <symbol> | <sexpr> | <qexpr> ; \
