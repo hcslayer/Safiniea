@@ -1,0 +1,1136 @@
+diff --git a/Makefile b/Makefile
+index 81dfc35..2e035b3 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,5 +1,31 @@
+-# Stupid simple makefile 
++# updated makefile for linked list implementation 
+ 
+-do : 
+-	gcc -std=c99 -Wall repl.c mpc.c -ledit -lm -o prompt
+-	
+\ No newline at end of file
++# CLIENT         = Safiniea
++# ADT            = List
++# SOURCE         = $(CLIENT).c
++# OBJECT         = $(CLIENT).o
++# ADT_SOURCE     = $(ADT).c
++# ADT_OBJECT     = $(ADT).o
++# ADT_HEADER     = $(ADT).h
++# COMPILE        = gcc -c -std=c99 -Wall
++# LINK           = gcc -o
++# REMOVE         = rm -f
++# MEMCHECK       = valgrind --leak-check=full
++
++# $(CLIENT) : $(OBJECT) $(ADT_OBJECT) 
++# 	$(LINK) $(CLIENT) $(OBJECT) $(ADT_OBJECT) 
++
++# $(OBJECT) : $(SOURCE) $(ADT_HEADER) 
++# 	$(COMPILE) $(SOURCE)
++
++# $(ADT_OBJECT) : $(ADT_SOURCE) $(ADT_HEADER)
++# 	$(COMPILE) $(ADT_SOURCE)
++
++# clean :
++# 	$(REMOVE) $(CLIENT) $(OBJECT) $(ADT_OBJECT) 
++
++# memcheck : $(CLIENT)
++# 	$(MEMCHECK) $(CLIENT)
++
++do: 
++	gcc -std=c99 -Wall safiniea.c mpc.c List.c -ledit -lm -o prompt
+diff --git a/repl.c b/repl.c
+index e7dea31..743431f 100644
+--- a/repl.c
++++ b/repl.c
+@@ -41,11 +41,17 @@ typedef sval*(*sbuiltin)(env*, sval*);
+ 
+ typedef struct sval {
+ 	int type; 
+-	long num; 
+-	sbuiltin fun; 
+-	// error and symbol types are now bound to char* 
++	
++	long num;
+ 	char* err; 
+-	char* sym;
++	char* sym; 
++
++	// function 
++	sbuiltin builtin; 
++	env* env; 
++	sval* formals; 
++	sval* body; 
++
+ 	// pointer to nested S-expr, and array len 
+ 	struct sval** cell;
+ 	int count; 
+@@ -142,31 +148,53 @@ sval* sval_qexpr(void) {
+ sval* sval_fun(sbuiltin func) {
+ 	sval* v = malloc(sizeof(sval)); 
+ 	v->type = SVAL_FUN; 
+-	v->fun = func; 
++	v->builtin = func; 
+ 	return v; 
+ }
+ 
+ struct env {
+-	int count; 
++	int count;
++	env* parent;  
+ 	char** syms; 
+ 	sval** vals; 
+ }; 
+ 
+ env* env_new(void) {
+ 	env* e = malloc(sizeof(env)); 
++	e->parent = NULL; 
+ 	e->count = 0; 
+ 	e->syms = NULL; 
+ 	e->vals = NULL; 
+ 	return e; 
+ }
+ 
++
++// builds user-defined functions 
++sval* sval_lambda(sval* formals, sval* body) {
++	sval* v = malloc(sizeof(sval)); 
++	v->type = SVAL_FUN; 
++
++	// set builtin to null 
++	v->builtin = NULL; 
++
++	// fresh environment 
++	v->env = env_new(); 
++
++	// set formals and body 
++	v->formals = formals; 
++	v->body = body; 
++	return v; 
++}
++
++// forward declaration 
++void free_env(env* e); 
++
+ // free svals 
+-void sval_free(sval* v) {
++void free_sval(sval* v) {
+ 
+ 	switch(v->type) {
+ 		// do nothing special for numbers 
+-		case SVAL_NUM: break; 
+-		case SVAL_FUN: break; 
++		case SVAL_NUM: break;  
+ 
+ 		// for err or sym, free string data 
+ 		case SVAL_ERR: free(v->err); break; 
+@@ -176,19 +204,27 @@ void sval_free(sval* v) {
+ 		case SVAL_SEXPR: 
+ 		case SVAL_QEXPR:
+ 			for (int i = 0; i < v->count; i++) {
+-				sval_free(v->cell[i]);
++				free_sval(v->cell[i]);
+ 			}
+ 			free(v->cell); 
+ 			break; 
++		// functions 
++		case SVAL_FUN: 
++			if (!v->builtin) {
++				free_env(v->env); 
++				free_sval(v->formals); 
++				free_sval(v->body); 
++			}
++			break; 
+ 	}
+ 	// free the struct itself. 
+ 	free(v); 
+ }
+ 
+-void env_del(env* e) {
++void free_env(env* e) {
+ 	for (int i = 0; i < e->count; i++) {
+ 		free(e->syms[i]); 
+-		sval_free(e->vals[i]); 
++		free_sval(e->vals[i]); 
+ 	}
+ 	free(e->syms); 
+ 	free(e->vals); 
+@@ -196,6 +232,24 @@ void env_del(env* e) {
+ }
+ 
+ 
++// forward declaration 
++sval* sval_copy(sval* v); 
++
++env* env_copy(env* e) {
++	env* n = malloc(sizeof(env)); 
++	n->parent = e->parent; 
++	n->count = e->count; 
++	n->syms = malloc(sizeof(char*) * n->count); 
++	n->vals = malloc(sizeof(char*) * n->count); 
++	for (int i = 0; i < e->count; i++) {
++		n->syms[i] = malloc(strlen(e->syms[i])+1); 
++		strcpy(n->syms[i], e->syms[i]); 
++		n->vals[i] = sval_copy(e->vals[i]); 
++	} 
++	return n; 
++}
++
++
+ 
+ // copy function to set up environments 
+ sval* sval_copy(sval* v) {
+@@ -203,8 +257,8 @@ sval* sval_copy(sval* v) {
+ 	x->type = v->type; 
+ 
+ 	switch(v->type) {
+-		case SVAL_FUN: x->fun = v->fun; break; 
+ 		case SVAL_NUM: x->num = v->num; break; 
++		
+ 		// dynamic operations 
+ 		case SVAL_ERR: 
+ 			x->err = malloc(strlen(v->err)+1); 
+@@ -214,6 +268,7 @@ sval* sval_copy(sval* v) {
+ 			x->sym = malloc(strlen(v->sym)+1); 
+ 			strcpy(x->sym, v->sym); 
+ 			break; 
++		
+ 		// lists require that we copy sub-expressions, too 
+ 		case SVAL_SEXPR:
+ 		case SVAL_QEXPR:
+@@ -223,6 +278,17 @@ sval* sval_copy(sval* v) {
+ 				x->cell[i] = sval_copy(v->cell[i]); 
+ 			}
+ 			break; 
++		
++		case SVAL_FUN: 
++			if (v->builtin) {
++				x->builtin = v->builtin; 
++			} else {
++				x->builtin = NULL; 
++				x->env = env_copy(v->env); 
++				x->formals = sval_copy(v->formals); 
++				x->body = sval_copy(v->body); 
++			}
++			break; 
+ 	}
+ 	return x; 
+ }
+@@ -234,6 +300,11 @@ sval* env_get(env* e, sval* k) {
+ 			return sval_copy(e->vals[i]); 
+ 		}
+ 	}
++	if (e->parent) {
++		return env_get(e->parent, k); 
++	}
++	// all environments searched, no symbol found 
++	// error 
+ 	return sval_err("Unbound symbol '%s'", k->sym); 
+ }
+ 
+@@ -242,7 +313,7 @@ void env_put(env* e, sval* k, sval* v) {
+ 	// if the sym exists, update it 
+ 	for (int i = 0; i < e->count; i++) {
+ 		if (strcmp(e->syms[i], k->sym) == 0) {
+-			sval_free(e->vals[i]); 
++			free_sval(e->vals[i]); 
+ 			e->vals[i] = sval_copy(v); 
+ 			return;  
+ 		}
+@@ -261,6 +332,12 @@ void env_put(env* e, sval* k, sval* v) {
+ 
+ }
+ 
++// update or bind top scope 
++void env_def(env* e, sval* k, sval* v) {
++	while (e->parent) { e = e->parent; }; 
++	env_put(e, k, v); 
++}
++
+ // nests one S-Expr inside of another 
+ sval* sval_add(sval* v, sval* x) {
+ 	v->count++; 
+@@ -337,9 +414,15 @@ void sval_print(sval* v) {
+ 		case SVAL_NUM: 		printf("%li", v->num); 			  break; 
+ 		case SVAL_ERR: 		printf("Error: %s", v->err);  break; 
+ 		case SVAL_SYM: 		printf("%s", v->sym); 			  break; 
+-		case SVAL_FUN: 	  printf("<function>"); 				break; 
+ 		case SVAL_SEXPR:  sval_expr_print(v, '(', ')'); break; 
+ 		case SVAL_QEXPR:  sval_expr_print(v, '{', '}'); break; 
++		case SVAL_FUN: 		
++			if (v->builtin) { printf("<builtin>"); } 
++			else {
++				printf("(\\ "); sval_print(v->formals); 
++				putchar(' '); 	sval_print(v->body); putchar(')');  
++			}
++			break; 
+ 	}
+ }
+ 
+@@ -355,6 +438,7 @@ sval* sval_pop(sval* v, int i);
+ sval* sval_take(sval* v, int i); 
+ sval* builtin_op(env* e, sval* v, char* op); 
+ sval* builtin(sval* a, char* func); 
++sval* sval_call(env* e, sval* f, sval* a); 
+ 
+ sval* sval_eval_sexpr(env* e, sval* v) {
+ 	// debug printf("sval_eval_sexpr() "); 
+@@ -376,21 +460,23 @@ sval* sval_eval_sexpr(env* e, sval* v) {
+ 	// ensure that the first element is a symbol 
+ 	sval* f = sval_pop(v, 0); 
+ 	if (f->type != SVAL_FUN) {
+-		sval_free(f); sval_free(v); 
+-		// throw syntax error 
+-		return sval_err("S-expression does not start with a valid symbol."); 
++		sval* err = sval_err(
++			"S-Expression starts with incorrect type. "
++			"Got %s, expected %s.", 
++			stype_name(f->type), stype_name(SVAL_FUN)); 
++		return err; 
+ 	}
+ 
+ 	// pass expression and arguments to function
+-	sval* result = f->fun(e, v);  
+-	sval_free(f); 
++	sval* result = sval_call(e, f, v);   
++	free_sval(f); 
+ 	return result; 
+ }
+ 
+ sval* sval_eval(env* e, sval* v) {
+ 	if (v->type == SVAL_SYM) {
+ 		sval* x = env_get(e, v); 
+-		sval_free(v); 
++		free_sval(v); 
+ 		return x; 
+ 	}
+ 	// evaluate S-expressions 
+@@ -422,7 +508,7 @@ sval* sval_pop(sval* v, int i) {
+ // perhaps useful when we hit bottom? 
+ sval* sval_take(sval* v, int i) {
+ 	sval* x = sval_pop(v, i); 
+-	sval_free(v); 
++	free_sval(v); 
+ 	return x; 
+ }
+ 
+@@ -430,9 +516,14 @@ sval* sval_take(sval* v, int i) {
+ sval* builtin_op(env* e, sval* a, char* op) {
+ 	// debug printf("builtin_op() "); 
+ 	// verify that input arguments are all numbers 
++
++	// exit route 
++	if (strcmp(op, "exit") == 0) { printf("Goodbye!\n"); exit(EXIT_SUCCESS);}
++
++
+ 	for (int i = 0; i < a->count; i++) {
+ 		if (a->cell[i]->type != SVAL_NUM) {
+-			sval_free(a); 
++			free_sval(a); 
+ 			return sval_err("Cannot operate on non-number arguments!"); 
+ 		}
+ 	}
+@@ -460,16 +551,16 @@ sval* builtin_op(env* e, sval* a, char* op) {
+ 		if (strcmp(op, "min") == 0) { x->num = findMin(x->num, y->num); }
+ 		// following operations require nonzero operands 
+ 		if (y->num == 0) { 
+-			sval_free(x); sval_free(y); 
++			free_sval(x); free_sval(y); 
+ 			x = sval_err("Division by zero!"); break; 
+ 		}
+ 		if (strcmp(op, "/") == 0) { x->num = x->num / y->num; }
+ 		if (strcmp(op, "%") == 0) { x->num = x->num % y->num; }
+ 
+-		sval_free(y); 
++		free_sval(y); 
+ 	}
+ 
+-	sval_free(a); 
++	free_sval(a); 
+ 	return x; 
+ }
+ 
+@@ -479,7 +570,7 @@ sval* builtin_op(env* e, sval* a, char* op) {
+ #define ERRCHECK(args, cond, fmt, ...) \
+ 	if (!(cond)) { \
+ 		sval* err = sval_err(fmt, ##__VA_ARGS__); \
+-		sval_free(args); \
++		free_sval(args); \
+ 		return err; \
+ 	}
+ 
+@@ -495,7 +586,7 @@ sval* builtin_head(env* e, sval* a) {
+ 
+ 	sval* v = sval_take(a, 0); 
+ 	// returns only the head of the expression 
+-	while (v->count > 1) { sval_free(sval_pop(v, 1)); }
++	while (v->count > 1) { free_sval(sval_pop(v, 1)); }
+ 	return v; 
+ }
+ 
+@@ -508,7 +599,7 @@ sval* builtin_tail(env* e, sval* a) {
+ 		"Function 'tail' passed { }!");
+ 	// removes the head of the expression and returns the rest 
+ 	sval* v = sval_take(a, 0); 
+-	sval_free(sval_pop(v, 0)); 
++	free_sval(sval_pop(v, 0)); 
+ 	return v; 
+ }
+ 
+@@ -538,7 +629,7 @@ sval* sval_join(sval* x, sval* y) {
+ 	}
+ 
+ 	// delete the empty 'y', and return 'x'
+-	sval_free(y); 
++	free_sval(y); 
+ 	return x; 
+ }
+ 
+@@ -557,10 +648,87 @@ sval* builtin_join(env* e, sval* a) {
+ 	}
+ 
+ 	// x replaces a as the joined expression 
+-	sval_free(a); 
++	free_sval(a); 
+ 	return x; 
+ }
+ 
++sval* sval_call(env* e, sval* f, sval* a) {
++
++	// if the function is builtin, call global copy 
++	if (f->builtin) { return f->builtin(e, a); }
++
++	// record argument counts 
++	int given = a->count; 
++	int total = f->formals->count; 
++
++	while (a->count) {
++
++		// we've run out! 
++		if (f->formals->count == 0) {
++			free_sval(a); return sval_err(
++				"Function recieved too many arguments! "
++				"Got %i, was expecting %i.", given, total); 
++		}
++		// pop the first symbol from the formals 
++		sval* sym = sval_pop(f->formals, 0); 
++
++		// determine if we're dealing with multiple arguments 
++		if (strcmp(sym->sym, "&") == 0) {
++			// verify that & is followed by a valid symbol 
++			if (f->formals->count != 1) {
++				free_sval(a); 
++				return sval_err("Function format invalid. "
++					"Symbol '&' not followed by a single symbol"); 
++			}
++			// next formal should be found to the remaining args 
++			sval* nsym = sval_pop(f->formals, 0); 
++			env_put(f->env, nsym, builtin_list(e, a)); 
++			free_sval(sym); free_sval(nsym); 
++		}
++		// get the first value, too 
++		sval* val = sval_pop(a, 0); 
++		// bind symbol and value 
++		env_put(f->env, sym, val); 
++		// clean up 
++		free_sval(sym); free_sval(val); 
++	}
++	// all arguments have been bound
++	free_sval(a); 
++
++	// if '&' remains in the formal list, bind it to the empty list 
++	if (f->formals->count > 0 
++		&& strcmp(f->formals->cell[0]->sym, "&") == 0) {
++
++		// verify that '&' wasn't passed individually. 
++		if (f->formals->count != 2) {
++			return sval_err("Function format invalid."
++				"Symbol '&' not followed by a single symbol."); 
++		}
++
++		// pop and delete '&' symbol 
++		free_sval(sval_pop(f->formals, 0)); 
++
++		// pop the next symbol, and create an empty list 
++		sval* sym = sval_pop(f->formals, 0); 
++		sval* val = sval_qexpr(); 
++
++		// bind to the environment and delete 
++		env_put(f->env, sym, val); 
++		free_sval(sym); free_sval(val); 
++	}
++
++	// if the number of arguments matched expectations, pursue eval 
++	if (f->formals->count == 0) {
++		f->env->parent = e; 
++		return builtin_eval(
++			f->env, sval_add(sval_sexpr(), sval_copy(f->body))); 
++	} else {
++		return sval_copy(f); // partial function. 
++	}
++}
++
++	
++
+ // updates for environmental bindings 
+ sval* builtin_add(env* e, sval* a) {  return builtin_op(e, a, "+"); }
+ sval* builtin_sub(env* e, sval* a) {  return builtin_op(e, a, "-"); }
+@@ -570,8 +738,9 @@ sval* builtin_pow(env* e, sval* a) {  return builtin_op(e, a, "^"); }
+ sval* builtin_max(env* e, sval* a) {  return builtin_op(e, a, "max"); }
+ sval* builtin_min(env* e, sval* a) {  return builtin_op(e, a, "min"); }
+ sval* builtin_mod(env* e, sval* a) {  return builtin_op(e, a, "%"); }
++sval* builtin_exit(env* e, sval* a) { return builtin_op(e, a, "exit"); }
+ 
+-sval* builtin_def(env* e, sval* a) {
++/* sval* builtin_def(env* e, sval* a) {
+ 	ERRCHECK(a, a->cell[0]->type == SVAL_QEXPR, 
+ 		"Function 'def' passed the incorrect type!"); 
+ 
+@@ -592,7 +761,38 @@ sval* builtin_def(env* e, sval* a) {
+ 		env_put(e, syms->cell[i], a->cell[i+1]); 
+ 	}
+ 
+-	sval_free(a); 
++	free_sval(a); 
++	return sval_sexpr(); 
++} */ 
++
++sval* builtin_var(env* e, sval* a, char* func) {
++	// ASSERT THAT TYPE IS CORRECT cf. ch 12!!! 
++
++	sval* syms = a->cell[0]; 
++	for (int i = 0; i < syms->count; i++) {
++		ERRCHECK(a, (syms->cell[i]->type == SVAL_SYM), 
++			"Function '%s' cannot define a non-symbol. "
++			"Got %s, expected %s.", func, 
++			stype_name(syms->cell[i]->type), 
++			stype_name(SVAL_SYM)); 
++	}
++
++	ERRCHECK(a, (syms->count == a->count - 1), 
++		"Function '%s' was passed too many arguments for symbols. "
++		"Got %i, expecting %i.", func, syms->count, a->count -1); 
++
++	for (int i = 0; i < syms->count; i++) {
++		// if 'def', global binding. if 'put', local binding 
++		if (strcmp(func, "def") == 0) {
++			env_def(e, syms->cell[i], a->cell[i+1]); 
++		}
++
++		if (strcmp(func, "=") == 0) {
++			env_put(e, syms->cell[i], a->cell[i+1]); 
++		}
++	}
++
++	free_sval(a); 
+ 	return sval_sexpr(); 
+ }
+ 
+@@ -601,10 +801,38 @@ void env_add_builtin(env* e, char* name, sbuiltin func) {
+ 	sval* k = sval_sym(name); 
+ 	sval* v = sval_fun(func); 
+ 	env_put(e, k, v); 
+-	sval_free(k); sval_free(v); 
++	free_sval(k); free_sval(v); 
++}
++
++// functionality for user-defined functions 
++// function junction, what's your function? 
++sval* builtin_lambda(env* e, sval* a) {
++	// check args (should be Q-expr) 
++	// TODO: implement error checking here 
++
++	for (int i = 0; i < a->cell[0]->count; i++) {
++		ERRCHECK(a, (a->cell[0]->cell[i]->type == SVAL_SYM), 
++			"Cannot define non-symbol. Got %s, expected %s.", 
++			stype_name(a->cell[0]->cell[i]->type), stype_name(SVAL_SYM)); 
++	}
++
++	// pop first two arguments, and pass them to the lambda creator 
++	sval* formals = sval_pop(a, 0); 
++	sval* body 		= sval_pop(a, 0); 
++	free_sval(a); 
++
++	return sval_lambda(formals, body); 
++}
++
++sval* builtin_def(env* e, sval* a) {
++	return builtin_var(e, a, "def");
+ }
+ 
+-void env_add_builtins(env* e) {
++sval* builtin_put(env* e, sval* a) {
++	return builtin_var(e, a, "="); 
++}
++
++void env_configure(env* e) {
+ 	env_add_builtin(e, "list", builtin_list);
+ 	env_add_builtin(e, "head", builtin_head);
+ 	env_add_builtin(e, "tail", builtin_tail);
+@@ -619,20 +847,14 @@ void env_add_builtins(env* e) {
+   env_add_builtin(e, "min", builtin_min);
+ 	env_add_builtin(e, "^", builtin_pow);
+ 	env_add_builtin(e, "%", builtin_mod);
++	env_add_builtin(e, "exit", builtin_exit); 
+ 
+ 	env_add_builtin(e, "def", builtin_def); 
++	env_add_builtin(e, "\\", builtin_lambda); 
++	env_add_builtin(e, "=", builtin_put); 
+ }
+ 
+-// swtichboard for builtin functions 
+-/*  if (strcmp("list", func) == 0) { return builtin_list(a); }
+-  if (strcmp("head", func) == 0) { return builtin_head(a); }
+-  if (strcmp("tail", func) == 0) { return builtin_tail(a); }
+-  if (strcmp("join", func) == 0) { return builtin_join(a); }
+-  if (strcmp("eval", func) == 0) { return builtin_eval(a); }
+-  if (strstr("+-/*", func)) { return builtin_op(a, func); }
+-  sval_free(a);
+-  return sval_err("Unknown Function!");
+-} */ 
++// =========================================================================== //
+ 
+ 
+ int main(int argc, char* argv[]) {
+@@ -664,7 +886,7 @@ mpca_lang(MPCA_LANG_DEFAULT,
+ 
+ 	// initialize top scope 
+ 	env* e = env_new(); 
+-	env_add_builtins(e); 
++	env_configure(e); 
+ 
+ 	// REPL loop 
+ 	while (true) {
+@@ -682,7 +904,7 @@ mpca_lang(MPCA_LANG_DEFAULT,
+ 			mpc_ast_print(r.output);
+ 			sval* x = sval_eval(e, sval_read(r.output)); 
+ 			sval_println(x);
+-			sval_free(x); 
++			free_sval(x); 
+ 			mpc_ast_delete(r.output); 
+ 		} 
+ 		else {
+@@ -694,7 +916,7 @@ mpca_lang(MPCA_LANG_DEFAULT,
+ 		// free retrieved input
+ 		free(input); 
+ 	}
+-	env_del(e); 
++	free_env(e); 
+ 	// undefine and clean up Parsers 
+ 	mpc_cleanup(6, Number, Symbol, Sexpr, Qexpr, Expr, Cue);
+ 	return(EXIT_SUCCESS); 
+diff --git a/safiniea.c b/safiniea.c
+index 06d5ad3..01a8bd8 100644
+--- a/safiniea.c
++++ b/safiniea.c
+@@ -11,6 +11,8 @@
+  * 			[ ] Refactor and prettify. 
+  *			[ ] Convert static arrays to linked lists. 
+  *			[ ] Review how everything actually works. 
++ *			[ ] Hot comment boxes for everything 
++ * 			[ ] Merge this branch with master. 
+  */ 
+ 
+ #include<stdio.h> 
+@@ -43,8 +45,10 @@ void add_history(char* reserve) {/* space filler */}
+ #endif 
+ 
+ 
++/*********************/ 
++/** Structure types **/
++/*********************/ 
+ 
+-/* Structure types */ 
+ struct sval; 
+ struct env; 
+ typedef struct sval sval; 
+@@ -52,11 +56,38 @@ typedef struct env env;
+ typedef sval*(*sbuiltin)(env*, sval*); 
+ 
+ /* All parsed data is of type sval */ 
++
++/* Sub-types */ 
+ typedef enum {
+ 	SVAL_NUM, SVAL_ERR, SVAL_SYM, SVAL_SEXPR, 
+ 	SVAL_QEXPR, SVAL_FUN
+ } value_type; 
+ 
++typedef enum {
++	ZERO_DIV_ERR, BAD_OP_ERR, BAD_NUM_ERR
++} err_type; 
++
++/* Error handling macros */ 
++#define ERRCHECK(args, cond, fmt, ...) \
++	if (!(cond)) { \
++		sval* err = sval_err(fmt, ##__VA_ARGS__); \
++		free_sval(args); \
++		return err; \
++	}
++
++/* Helper function for type lookup */ 
++char* find_type(value_type t) {
++	switch(t) {
++		case SVAL_FUN: return "Function"; 
++		case SVAL_NUM: return "Number"; 
++		case SVAL_SYM: return "Symbol"; 
++		case SVAL_ERR: return "Error"; 
++		case SVAL_SEXPR: return "S-Expression"; 
++		case SVAL_QEXPR: return "Q-Expression"; 
++		default: return "???"; 
++	}
++}
++
+ typedef struct sval {
+ 	value_type type; 
+ 
+@@ -76,6 +107,439 @@ typedef struct sval {
+ 	int count;
+ } sval; 
+ 
++/* Sub-type constructors */
++
++/* Number */  
++sval* number(long x) {
++	sval* v = malloc(sizeof(sval));  
++	v->type = SVAL_NUM;
++	v->num = x; 
++	return v; 
++}
++
++/* Error */ 
++sval* error(char* fmt, ...) {
++	sval* v = malloc(sizeof(sval)); 
++	v->type = SVAL_ERR; 
++	
++	/* Init and configure v.a. list */ 
++	va_list va; 
++	va_start(va, fmt);  
++	v->err = malloc(512); 
++	vsnprintf(v->err, 511, fmt, va); 
++	
++	/* Err messages max out at 511 bytes */ 
++	v->err = realloc(v->err, strlen(v->err)+1);
++	va_end(va); 
++
++	return v; 
++}
++
++/* Symbol */ 
++sval* symbol(char* s) {
++	sval* v = malloc(sizeof(sval)); 
++	v->type = SVAL_SYM; 
++	v->sym  = malloc(strlen(s)+1); 
++	strcpy(v->sym, s); 
++	return v; 
++}
++
++/* S-Expression */ 
++sval* sexpr(void) {
++	sval* v = malloc(sizeof(sval)); 
++	v->type = SVAL_SEXPR; 
++	v->count = 0; 
++	v->children = NULL; 
++	return v; 
++}
++
++/* Q-Expression */ 
++sval* qexpr(void) {
++	sval* v = malloc(sizeof(sval)); 
++	v->type = SVAL_QEXPR;
++	v->count = 0; 
++	v->children = NULL;
++	return v; 
++}
++
++/* Function */ 
++sval* fun(sbuiltin func) {
++	sval* v = malloc(sizeof(sval)); 
++	v->type = SVAL_FUN; 
++	v->builtin = func; 
++	return v; 
++}
++
++/* Environment structure */ 
++struct env {
++	int count; 
++	env* parent; 
++	char** syms; 
++	sval** vals; 
++}; 
++
++env* new_env(void) {
++	env* e = malloc(sizeof(env)); 
++	e->parent = NULL; 
++	e->count = 0; 
++	e->syms = NULL; 
++	e->vals = NULL; 
++	return e; 
++}
++
++/* Destructors */ 
++void free_env(env* e); 
++void free_sval(sval* v); 
++
++void free_sval(sval* v) {
++
++	switch(v->type) {
++
++		case SVAL_NUM: break;  
++
++		case SVAL_ERR: free(v->err); break; 
++		case SVAL_SYM: free(v->sym); break; 
++
++		case SVAL_SEXPR: 
++		case SVAL_QEXPR:
++			freeList(&(v->children));  
++			break; 
++
++		case SVAL_FUN: 
++			if (!v->builtin) {
++				free_env(v->env); 
++				free_sval(v->formals); 
++				free_sval(v->body); 
++			}
++			break; 
++	}
++	free(v); 
++}
++
++void free_env(env* e) {
++	for (int i = 0; i < e->count; i++) {
++		free(e->syms[i]); 
++		free_sval(e->vals[i]); 
++	}
++	free(e->syms); 
++	free(e->vals); 
++	free(e);
++}
++
++/********************/ 
++/** Copy functions **/
++/********************/
++
++sval* copy_sval(sval* v); 
++env* copy_env(env* e); 
++List copy_list(List L); 
++
++
++sval* copy_sval(sval* v) {
++	/* Initialize duplicate */ 
++	sval* x = malloc(sizeof(sval)); 
++	x->type = v->type; 
++	
++	switch(v->type) {
++		case SVAL_NUM: x->num = v->num; break; 
++		
++		/* Copy internal data */ 
++		case SVAL_ERR: 
++			x->err = malloc(strlen(v->err)+1); 
++			strcpy(x->err, v->err); 
++			break;
++		case SVAL_SYM: 
++			x->sym = malloc(strlen(v->sym)+1); 
++			strcpy(x->sym, v->sym); 
++			break; 
++		
++		/* Copy internal lists/linkage */ 
++		case SVAL_SEXPR:
++		case SVAL_QEXPR:
++			x->count = v->count; 
++			x->children = copy_list(v->children); 
++			break;
++		
++		case SVAL_FUN: 
++			if (v->builtin) {
++				x->builtin = v->builtin; 
++			} else {
++				x->builtin = NULL; 
++				x->env = copy_env(v->env); 
++				x->formals = copy_sval(v->formals); 
++				x->body = copy_sval(v->body); 
++			}
++			break; 
++	}
++	return x; 
++}
++
++env* copy_env(env* e) {
++	env* n = malloc(sizeof(env)); 
++	n->parent = e->parent; 
++	n->count = e->count; 
++	n->syms = malloc(sizeof(char*) * n->count); 
++	n->vals = malloc(sizeof(char*) * n->count); 
++	for (int i = 0; i < e->count; i++) {
++		n->syms[i] = malloc(strlen(e->syms[i])+1); 
++		strcpy(n->syms[i], e->syms[i]); 
++		n->vals[i] = copy_sval(e->vals[i]); 
++	} 
++	return n; 
++}
++
++List copy_list(List L) {
++	if (!L) { exit(EXIT_FAILURE); } /* FIXME: Do proper list error handling */ 
++	List C = newList(); 						/* FIXME: Lint List camel-case to GNU std */ 
++	sval* v; 
++	if (length(L) > 0) {
++		moveFront(L); 
++		while (idx(L) >= 0) {
++			v = (sval*)get(L); 
++			append(C, v); 
++			moveNext(L); 
++		}
++	}
++	return C; 
++}
++
++/**************************/ 
++/** Environment handlers **/ 
++/**************************/ 
++
++/* Retrieve environmental bindings */ 
++sval* get_env(env* e, sval* k) {
++	for (int i = 0; i < e->count; i++) {
++		if (strcmp(e->syms[i], k->sym) == 0) {
++			return copy_sval(e->vals[i]); 
++		}
++	}
++	/* Symbol not found, search parent envs */ 
++	if (e->parent) {
++		return get_env(e->parent, k); 
++	}
++	return error("Unbound symbol '%s'", k->sym); 
++}
++
++/* Set environmental bindings */ 
++void set_env(env* e, sval* k, sval* v) {
++	
++	/* Update an existing binding */ 
++	for (int i = 0; i < e->count; i++) {
++		if (strcmp(e->syms[i], k->sym) == 0) {
++			free_sval(e->vals[i]); 
++			e->vals[i] = copy_sval(v); 
++			return;  
++		}
++	}
++
++	/* Create a new binding */ 
++	e->count++; 
++	e->vals = realloc(e->vals, sizeof(sval*) * e->count); 
++	e->syms = realloc(e->syms, sizeof(char*) * e->count); 
++	// update contents 
++	e->vals[e->count-1] = copy_sval(v); 
++	e->syms[e->count-1] = malloc(strlen(k->sym)+1); 
++	strcpy(e->syms[e->count-1], k->sym); 
++	return; 
++}
++
++/* Wrapper to update top scope */ 
++void def_env(env* e, sval* k, sval* v) {
++	while (e->parent) { e = e->parent; }; 
++	set_env(e, k, v); 
++}
++
++/* Function builder */ 
++sval* make_func(sval* formals, sval* body) {
++	sval* v = malloc(sizeof(sval)); 
++	v->type = SVAL_FUN; 
++
++	/* Signifies user-created */ 
++	v->builtin = NULL; 
++
++	/* Internal scope */ 
++	v->env = new_env(); 
++	v->formals = formals; 
++	v->body = body; 
++	return v; 
++}
++
++/***********************/ 
++/** Reading functions **/
++/***********************/  
++
++/* S-Expression helper: nests one sexpr inside the other */ 
++sval* sexpr_compose(sval* v, sval* x) {
++	v->count++; 
++	append(v->children, x); 
++	return v; 
++}
++
++/* Number reader with error handling */ 
++sval* read_num(mpc_ast_t* t) {
++	errno = 0; 
++	long x = strtol(t->contents, NULL, 10); 
++	return errno != ERANGE ? 
++		number(x) : error("invalid number"); 
++}
++
++/* MPC reader, parses AST. 
++ * Do not confuse t->children with children of values */ 
++sval* sval_read(mpc_ast_t* t) {
++	
++	/* Convert symbols to the proper type */ 
++	if (strstr(t->tag, "number")) { return read_num(t); }
++	if (strstr(t->tag, "symbol")) { return symbol(t->contents); }
++	
++	/* S-expressions and Q-expressions simply hold more data */ 
++	sval* x = NULL; 
++	if (strcmp(t->tag, ">") == 0) { x = sexpr(); }
++	if (strstr(t->tag, "sexpr")) 	{ x = sexpr(); }
++	if (strstr(t->tag, "qexpr"))  { x = qexpr(); }
++
++	/* Recurse to fill in that data */ 
++	for (int i = 0; i < t->children_num; i++) {
++		
++		/* Consume and discard any unnecessary signage */ 
++		if (strcmp(t->children[i]->contents, "(") == 0) {continue;}
++		if (strcmp(t->children[i]->contents, ")") == 0) {continue;}
++		if (strcmp(t->children[i]->contents, "{") == 0) {continue;}
++		if (strcmp(t->children[i]->contents, "}") == 0) {continue;}
++		if (strcmp(t->children[i]->tag,  "regex") == 0) {continue;}
++		x = sexpr_compose(x, sval_read(t->children[i])); 
++	}
++	return x; 
++}
++
++/************************/ 
++/** Printing functions **/
++/************************/ 
++
++void print_expr(sval* v, char open, char close); 
++void print_value(sval* v);
++void print_valueln(sval* v); 
++
++void print_expr(sval* v, char open, char close) {
++	putchar(open); 
++	if (length(v->children) > 0) {
++		moveFront(v->children); 
++		while (idx(v->children) >= 0) {
++			print_value(get(v->children));
++			if (idx(v->children) < v->count - 1) {
++				putchar(' '); 
++			} 
++			moveNext(v->children); 
++		}
++	}
++	putchar(close); 
++}
++
++void print_value(sval* v) {
++	switch (v->type) {
++		case SVAL_NUM: 		printf("%li", v->num); 			  break; 
++		case SVAL_ERR: 		printf("Error: %s", v->err);  break; 
++		case SVAL_SYM: 		printf("%s", v->sym); 			  break; 
++		case SVAL_SEXPR:  print_expr(v, '(', ')'); break; 
++		case SVAL_QEXPR:  print_expr(v, '{', '}'); break; 
++		case SVAL_FUN: 		
++			if (v->builtin) { printf("<builtin>"); } 
++			else {
++				printf("(\\ "); print_value(v->formals); 
++				putchar(' '); 	print_value(v->body); putchar(')');  
++			}
++			break; 
++	}
++}
++
++void print_valueln(sval* v) { print_value(v); putchar('\n'); }
++
++/**************************/ 
++/** Evaluation functions **/
++/**************************/ 
++
++sval* evaluate(env* e, sval* v); 
++sval* evaluate_sexpr(env* e, sval* v); 
++sval* pop(sval* v, int i); 
++sval* take(sval* v, int i); 
++sval* builtin_op(env* e, sval* v, char* op); 
++sval* builtin(sval* a, char* func); 
++sval* call(env* e, sval* f, sval* a);
++
++/* S-expression evaluator; works from inside -> out */  
++sval* evaluate_sexpr(env* e, sval* v) {
++	List children = v->children; 
++	if (length(children) > 1) {
++		moveFront(children); 
++		while (idx(children) >= 0) {
++			evaluate(e, get(children)); 
++			moveNext(children); 
++		}
++	}
++
++	/* Check for the propogation of errors */ 
++	/* WARNING: Be sure to check the edge cases here */ 
++	if (length(children) > 0) {
++		moveFront(children); 
++		while (idx(children) >= 0) {
++			if (((sval*)get(children))->type == SVAL_ERR) {
++				return take(v, idx(children)); 
++			}
++			moveNext(children); 
++		}
++	} 
++
++	/* Empty expression */ 
++	if (length(children) == 0) {
++		return v; 
++	}
++
++	/* Single expression */ 
++	if (length(children) == 1) {
++		return take(v, 0); 
++	}
++	
++	/* Evaluation:  ensure that the first element is a symbol */ 
++	sval* f = pop(v, 0); 
++	if (f->type != SVAL_FUN) {
++		sval* err = error(
++			"S-Expression starts with incorrect type. "
++			"Got %s, expected %s.", 
++			find_type(f->type), find_type(SVAL_FUN)); 
++		return err; 
++	}
++
++	if (v->type == SVAL_SEXPR) return evaluate_sexpr(e, v);
++	return v; 
++}
++
++/* Pop : removes an element from the list, leaving the remainder in tact */ 
++sval* pop(sval* v, int i) {
++	sval* x; 
++	if (i == 0 && length(v->children) > 0) {
++		x = (sval*)front(v->children);
++		deleteFront(v->children); 
++		v->count--; 
++		return x; 
++	}
++	/* Find ith element */ 
++	if (length(v->children) > 0) {
++		moveFront(v->children); 
++		while (idx(v->children) < i && idx(v->children) != -1) {
++			moveNext(v->children); 
++		}
++		if (idx(v->children) != -1) { /* Found */ 
++			x = (sval*)get(v->children); 
++			delete(v->children);
++			v->count--;  
++			return x; 
++		} else {
++			return error("Henry, your linked list is broken. Fix this."); 
++		}
++	}
++
++}
++
+ 
+ 
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+@@ -122,8 +586,8 @@ int main(int argc, char* argv[]) {
+ 		if (mpc_parse("<stdin>", input, Cue, &r)) {
+ 			/* Diagnostic: print AST 
+ 			 * mpc_ast_print(r.output) */ 
+-			sval* x = sval_eval(e, sval_read(r.output)); 
+-			sval_println(x);
++			sval* x = evaluate(e, sval_read(r.output)); 
++			print_valueln(x);
+ 			free_sval(x); 
+ 			mpc_ast_delete(r.output); 
+ 		} 
