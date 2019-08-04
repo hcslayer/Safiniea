@@ -598,15 +598,13 @@ sval* builtin_op(env* e, sval* a, char* op) {
 
 	/* Verify that input are numbers */ 
 	List A = a->children; 
-	if (length(A) > 0) {
-		moveFront(A);
-		while (idx(A) >= 0) {
-			if (((sval*)get(A))->type != SVAL_NUM) {
-				free_sval(a); 
-				return error("%s Error: Cannot operate on non-number arguments", op); 
-			}
-			moveNext(A); 
+	moveFront(A);
+	for (int i = 0; i < a->count; i++) {
+		if (((sval*)get(A))->type != SVAL_NUM) {
+			free_sval(a); 
+			return error("%s Error: Cannot operate on non-number arguments", op); 
 		}
+		moveNext(A); 
 	}
 
 	/* Pop the first element */ 
@@ -696,10 +694,12 @@ sval* builtin_list(env* e, sval* a) {
 /* Join: composes multiple Q-expressions */ 
 sval* join_helper(sval* x, sval* y) {
 	/* Add each cell in 'y' to 'x' */ 
-	while (y->count) {
-		x = sexpr_compose(x, pop(y, 0)); 
+	List Y = y->children; 
+	moveFront(Y); 
+	while (idx(Y) >= 0) {
+		sexpr_compose(x, get(Y)); 
+		moveNext(Y); 
 	}
-
 	/* Discard 'y' */ 
 	free_sval(y); 
 	return x; 
@@ -786,7 +786,7 @@ sval* set_var(env* e, sval* a, char* func) {
 		"Got %i, expecting %i.", func, symbols->count, a->count -1); 
 
 	/* "def" sets global bindings, "=" is a local binding */ 
-	moveFront(S); moveFront(A); moveFront(A); /* Advance A one past S */ 
+	moveFront(S); moveFront(A); moveNext(A); /* Advance A one past S */ 
 	for (int i = 0; i < symbols->count; i++) {
 		if (strcmp(func, "def") == 0) {
 			def_env(e, (sval*)get(S), (sval*)get(A)); 
