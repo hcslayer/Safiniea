@@ -62,7 +62,8 @@ typedef sval*(*sbuiltin)(env*, sval*);
 
 /* Sub-types */ 
 typedef enum {
-	SVAL_NUM, SVAL_ERR, SVAL_SYM, SVAL_SEXPR, SVAL_QEXPR, SVAL_FUN
+	SVAL_NUM, SVAL_ERR, SVAL_SYM, SVAL_SEXPR, SVAL_QEXPR, SVAL_FUN,
+	SVAL_BOOL  
 } value_type; 
 
 typedef enum {
@@ -77,7 +78,8 @@ char* find_type(value_type t) {
 		case SVAL_SYM: return "Symbol"; 
 		case SVAL_ERR: return "Error"; 
 		case SVAL_SEXPR: return "S-Expression"; 
-		case SVAL_QEXPR: return "Q-Expression"; 
+		case SVAL_QEXPR: return "Q-Expression";
+		case SVAL_BOOL: return "Boolean"; 
 		default: return "???"; 
 	}
 }
@@ -116,6 +118,9 @@ typedef struct sval {
 	long num; 
 	char* err; 
 	char* sym; 
+
+	/* Boolin' */ 
+	short tval; 
 
 	/* Functions */ 
 	sbuiltin builtin;
@@ -191,6 +196,14 @@ sval* fun(sbuiltin func) {
 	return v; 
 }
 
+/* Boolean */ 
+sval* truthy(short b) {
+	sval* v = malloc(sizeof(sval)); 
+	v->type = SVAL_BOOL; 
+	v->tval = b; 
+	return v; 
+}
+
 env* new_env(void); 
 
 /* User-defined function (lambda) */ 
@@ -229,7 +242,8 @@ void free_env(env* e);
 void free_sval(sval* v) {
 
 	switch(v->type) {
-		case SVAL_NUM: break;  
+		case SVAL_NUM: break;
+		case SVAL_BOOL: break;   
 
 		case SVAL_ERR: free(v->err); break; 
 		case SVAL_SYM: free(v->sym); break; 
@@ -275,6 +289,7 @@ sval* copy_sval(sval* v) {
 	
 	switch(v->type) {
 		case SVAL_NUM: x->num = v->num; break; 
+		case SVAL_BOOL: x->tval = v->tval; break; 
 		
 		/* Copy internal data */ 
 		case SVAL_ERR: 
@@ -453,6 +468,7 @@ void print_value(sval* v) {
 				putchar(' '); 	print_value(v->body); putchar(')');  
 			}
 			break; 
+		case SVAL_BOOL: 	printf("%s", (v->tval) ? "true" : "false"); break; 
 	}
 }
 
@@ -488,17 +504,6 @@ sval* evaluate(env* e, sval* v) {
 	return v; 
 }
 
-/* Swap: a list helper for evaluate_sexpr */ 
-void swap(List L, sval* x, int i) {
-	int target_index = i;
-	printf("Target index: %d\n", target_index);  
-	insertBefore(L, x); /* insert new element */ 
-	delete(L); /* delete old element at target idx */ 
-	moveFront(L); /* restore cursor position */ 
-	for (int i = 0; i < target_index; i++) {
-		moveNext(L); 
-	}
-}
 
 /* S-expression evaluator; works from inside -> out */  
 sval* evaluate_sexpr(env* e, sval* v) {
@@ -554,6 +559,14 @@ long findMax(long x, long y) { return (x > y) ? x : y; }
 
 /* Switchboard for evaluating basic built-ins (+-/*) */
 sval* builtin_op(env* e, sval* a, char* op) {
+	if (strcmp(op, "exit") == 0) {
+		free_sval(a); free_env(e); 
+		printf("Goodbye!\n"); 
+		/* implement an exit function */ 
+		exit(EXIT_SUCCESS); 
+
+	}
+	
 	for (int i = 0; i < a->count; i++) {
 		ERRCHECK_TYPE(op, a, i, SVAL_NUM); 
 	}
@@ -591,6 +604,33 @@ sval* builtin_op(env* e, sval* a, char* op) {
 
 	free_sval(a); 
 	return x;
+}
+
+sval* builtin_cond(env* e, sval* a, char* op) {
+	printf("calling conditional..."); 
+	/* verify that two numeric arguments are passed */ 
+	ERRCHECK_NUM(op, a, 2); 
+	ERRCHECK_TYPE(op, a, 0, SVAL_NUM);
+	ERRCHECK_TYPE(op, a, 1, SVAL_NUM); 
+
+	sval* x = pop(a, 0); 
+	sval* y = pop(a, 0);
+	free_sval(a); 
+	sval* result; 
+
+	if (strcmp(op, "==") == 0) { result = truthy((x->num == y->num)); }
+	if (strcmp(op, "<=") == 0) { result = truthy((x->num <= y->num)); }
+	if (strcmp(op, ">=") == 0) { result = truthy((x->num >= y->num)); } 
+	if (strcmp(op, "<") == 0)  { result = truthy((x->num < y->num)); }
+	if (strcmp(op, ">") == 0)  { result = truthy((x->num > y->num)); }
+	/* else {
+		free_sval(x); free_sval(y); 
+		return error("Unexpected conditional: %s", op); 
+	} */ 
+
+	free_sval(x); free_sval(y); 
+	return result; 
+
 }
 
 /*******************/ 
@@ -658,6 +698,36 @@ sval* builtin_eval(env* e, sval* a) {
 	return evaluate(e, x); 
 }
 
+/* If: a ternary-sort of operator */ 
+sval* builtin_if(env* e, sval* a) {
+	/* Expects 3 sexpr args */ 
+	ERRCHECK_NUM("!if", a, 3); 
+	for (int i = 0; i < 3; i++) {
+		ERRCHECK_TYPE("!if", a, i, SVAL_QEXPR); 
+	}
+
+	for (int i = 0; i < 3; i++) {
+		print_valueln(a->cell[i]); 
+	}
+
+	for (int i = 0; i < 3; i++) {
+		/* make each path executible */ 
+		a->cell[i]->type = SVAL_SEXPR; 
+	}
+
+	sval* cond = evaluate(e, pop(a, 0));
+	sval* then;  
+	if (cond->tval) {
+		then = pop(a, 0); 
+	} else {
+		then = pop(a, 1); 
+	}
+
+	free_sval(cond); 
+	free_sval(a); 
+	return evaluate(e, then); 
+}
+
 /*********************************/ 
 /** Functions && Environment II **/
 /*********************************/
@@ -671,7 +741,14 @@ sval* builtin_pow(env* e, sval* a) {  return builtin_op(e, a, "^"); }
 sval* builtin_max(env* e, sval* a) {  return builtin_op(e, a, "max"); }
 sval* builtin_min(env* e, sval* a) {  return builtin_op(e, a, "min"); }
 sval* builtin_mod(env* e, sval* a) {  return builtin_op(e, a, "%"); }
-sval* builtin_exit(env* e, sval* a) { return builtin_op(e, a, "exit"); } 
+sval* builtin_exit(env* e, sval* a) { return builtin_op(e, a, "exit"); }
+
+/* Register conditional functions with ENV */ 
+sval* builtin_eq(env* e, sval* a) { return builtin_cond(e, a, "=="); }
+sval* builtin_geq(env* e, sval* a) { return builtin_cond(e, a, ">="); }
+sval* builtin_leq(env* e, sval* a) { return builtin_cond(e, a, "<="); }
+sval* builtin_less(env* e, sval* a) { return builtin_cond(e, a, "<"); }
+sval* builtin_more(env* e, sval* a) { return builtin_cond(e, a, ">"); } 
 
 void env_add_builtin(env* e, char* name, sbuiltin func) {
 	sval* k = symbol(name); 
@@ -827,6 +904,7 @@ void env_configure(env* e) {
 	env_add_builtin(e, "tail", builtin_tail);
 	env_add_builtin(e, "eval", builtin_eval);
 	env_add_builtin(e, "join", builtin_join);
+	env_add_builtin(e, "!if", builtin_if); 
 
 	env_add_builtin(e, "+", builtin_add);
 	env_add_builtin(e, "-", builtin_sub);
@@ -837,6 +915,12 @@ void env_configure(env* e) {
 	env_add_builtin(e, "^", builtin_pow);
 	env_add_builtin(e, "%", builtin_mod);
 	env_add_builtin(e, "exit", builtin_exit); 
+
+	env_add_builtin(e, "==", builtin_eq); 
+	env_add_builtin(e, "<=", builtin_leq); 
+	env_add_builtin(e, ">=", builtin_geq); 
+	env_add_builtin(e, "<", builtin_less); 
+	env_add_builtin(e, ">", builtin_more); 
 
 	env_add_builtin(e, "def", builtin_def); 
 	env_add_builtin(e, "\\", builtin_lambda); 
