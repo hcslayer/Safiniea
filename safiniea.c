@@ -89,17 +89,23 @@ char* find_type(value_type t) {
 		free_sval(args); \
 		return err; \
 	}
+
 #define ERRCHECK_TYPE(func, args, index, expect) \
   ERRCHECK(args, args->cell[index]->type == expect, \
     "Function '%s' passed incorrect type for argument %i. " \
     "Got %s, Expected %s.", \
-    func, index, ltype_name(args->cell[index]->type), ltype_name(expect))
+    func, index, find_type(args->cell[index]->type), find_type(expect))
 
 #define ERRCHECK_NUM(func, args, num) \
   ERRCHECK(args, args->count == num, \
     "Function '%s' passed incorrect number of arguments. " \
     "Got %i, Expected %i.", \
     func, args->count, num)
+
+#define ERRCHECK_NOT_EMPTY(func, args, index) \
+  ERRCHECK(args, args->cell[index]->count != 0, \
+    "Function '%s' passed {} for argument %i.", func, index);
+
 
 /* Primary data type */ 
 
@@ -373,21 +379,6 @@ void def_env(env* e, sval* k, sval* v) {
 	set_env(e, k, v); 
 }
 
-/* Function builder */ 
-sval* make_func(sval* formals, sval* body) {
-	sval* v = malloc(sizeof(sval)); 
-	v->type = SVAL_FUN; 
-
-	/* Signifies user-created */ 
-	v->builtin = NULL; 
-
-	/* Internal scope */ 
-	v->env = new_env(); 
-	v->formals = formals; 
-	v->body = body; 
-	return v; 
-}
-
 /***********************/ 
 /** Reading functions **/
 /***********************/  
@@ -423,7 +414,7 @@ sval* sval_read(mpc_ast_t* t) {
 		if (strcmp(t->children[i]->contents, "{") == 0) {continue;}
 		if (strcmp(t->children[i]->contents, "}") == 0) {continue;}
 		if (strcmp(t->children[i]->tag,  "regex") == 0) {continue;}
-		printf("calling sval_compose()\n"); 
+		//printf("calling sval_compose()\n"); 
 		x = sval_compose(x, sval_read(t->children[i])); 
 	}
 	return x; 
@@ -439,14 +430,10 @@ void print_valueln(sval* v);
 
 void print_expr(sval* v, char open, char close) {
 	putchar(open); 
-	if (length(v->children) > 0) {
-		moveFront(v->children); 
-		while (idx(v->children) >= 0) {
-			print_value(get(v->children));
-			if (idx(v->children) < v->count - 1) {
-				putchar(' '); 
-			} 
-			moveNext(v->children); 
+	for (int i = 0; i < v->count; i++) {
+		print_value(v->cell[i]); 
+		if (i != (v->count-1)) {
+			putchar(' '); 
 		}
 	}
 	putchar(close); 
@@ -486,7 +473,6 @@ sval* call(env* e, sval* f, sval* a);
 /* Directs evaluation; main entry point */ 
 sval* evaluate(env* e, sval* v) {
 	if (v->type == SVAL_SYM) {
-		printf("symbol detected\n"); 
 		/* Retrieve binding value */ 
 		sval* x = get_env(e, v); 
 		free_sval(v); 
@@ -516,54 +502,37 @@ void swap(List L, sval* x, int i) {
 
 /* S-expression evaluator; works from inside -> out */  
 sval* evaluate_sexpr(env* e, sval* v) {
-	printf("eval_sexpr(): v->count: %d\n", v->count); 
-	List children = v->children; 
-	if (v->count > 0) { moveFront(children); }
 	for (int i = 0; i < v->count; i++) {
-		sval* child_eval = evaluate(e, get(children));
-		printf("swapping... "); 
-		swap(children, child_eval, i); 
-		printf(" complete.\n"); 
-		//moveNext(children); 
-	}
-
-	/* Check for error propogation */
-	if (v->count > 0) { moveFront(children); } 
-	for (int i = 0; i < v->count; i++) {
-		if (((sval*)get(children))->type == SVAL_ERR) {
-			return take(v, 0); 
+		v->cell[i] = evaluate(e, v->cell[i]);
+		/* Check for errors */  
+		if (v->cell[i]->type == SVAL_ERR) {
+			return take(v, i); 
 		}
 	}
 
-	/* Case of 1 and 0 */ 
 	if (v->count == 0) { return v; }
 	if (v->count == 1) { return evaluate(e, take(v, 0)); }
-	
-	/* Evaluation:  ensure that the first element is a symbol */ 
+
 	sval* f = pop(v, 0); 
 	if (f->type != SVAL_FUN) {
-		sval* err = error(
-			"S-Expression starts with incorrect type. "
-			"Got %s, expected %s.", 
-			find_type(f->type), find_type(SVAL_FUN)); 
-		return err; 
+		return error(
+			"S-Expression starts with an invalid type. "
+			"Expected Function, got %s", find_type(f->type)); 
 	}
 
 	sval* result = call(e, f, v); 
 	free_sval(f); 
 	return result; 
+
 }
 
 /* Pop : removes an element from the list, leaving the remainder in tact */ 
 sval* pop(sval* v, int i) {
-	List V = v->children; 
-	moveFront(V); 
-	for (int k = 0; k < i; k++) {
-		moveNext(V); 
-	}
-	sval* x = get(V); 
-	delete(V); 
-	v->count--; 
+	sval* x = v->cell[i]; 
+	memmove(&v->cell[i], &v->cell[i+1], 
+		sizeof(sval*) * v->count-i-1); 
+	v->count--;
+	v->cell = realloc(v->cell, sizeof(sval*) * v->count); 
 	return x; 
 }
 
@@ -574,6 +543,10 @@ sval* take(sval* v, int i) {
 	return x; 
 }
 
+/***********************/ 
+/** Builtin Functions **/
+/***********************/ 
+
 
 /* Helpers for builtin_op */ 
 long findMin(long x, long y) { return (x > y) ? y : x; }
@@ -581,25 +554,10 @@ long findMax(long x, long y) { return (x > y) ? x : y; }
 
 /* Switchboard for evaluating basic built-ins (+-/*) */
 sval* builtin_op(env* e, sval* a, char* op) {
-	/* Exit */ 
-	if (strcmp(op, "Exit") == 0) { 
-		printf("Goodbye!\n"); 
-		free_sval(a); 
-		/* free_env(e); not sure if necessary */ 
-		exit(EXIT_SUCCESS); 
-	}
-
-	/* Verify that input are numbers */ 
-	List A = a->children;
-	moveFront(A); 
 	for (int i = 0; i < a->count; i++) {
-		if (((sval*)get(A))->type != SVAL_NUM) {
-			return error("%s Error: Expected number operand.", op); 
-		}
-		moveNext(A); 
+		ERRCHECK_TYPE(op, a, i, SVAL_NUM); 
 	}
 
-	/* Pop the first element */ 
 	sval* x = pop(a, 0); 
 
 	/* If no arguments, and op == '-', negate */ 
@@ -641,39 +599,23 @@ sval* builtin_op(env* e, sval* a, char* op) {
 
 /* Head: resolves a Q-Expr into the first argument */ 
 sval* builtin_head(env* e, sval* a) {
-	/* Error handling */ 
-	List A = a->children; 
-	ERRCHECK(a, a->count == 1, 
-		"Function 'head' passed too many arguments!"); 
-	ERRCHECK(a, ((sval*)front(A))->type == SVAL_QEXPR, 
-		"Function 'head' passed the incorrect type!"
-		" Got %s, expected %s.", 
-		find_type(((sval*)front(A))->type), find_type(SVAL_QEXPR)); 
-	ERRCHECK(a, ((sval*)front(A))->count != 0, 
-		"Function 'head' passed { }!"); 
+	ERRCHECK_NUM("head", a, 1); 
+	ERRCHECK_TYPE("head", a, 0, SVAL_QEXPR); 
+	ERRCHECK_NOT_EMPTY("head", a, 0); 
 
 	sval* v = take(a, 0); 
-	/* Resolve only the first data element */  
 	while (v->count > 1) { free_sval(pop(v, 1)); }
 	return v; 
 }
 
 /* Tail: resolves by removing the head, returning what is left */ 
 sval* builtin_tail(env* e, sval* a) {
-	/* Error handling */ 
-	List A = a->children; 
-	ERRCHECK(a, a->count == 1, 
-		"Function 'tail' passed too many arguments!"); 
-	ERRCHECK(a, ((sval*)front(A))->type == SVAL_QEXPR, 
-		"Function 'tail' passed the incorrect type!"
-		" Got %s, expected %s.", 
-		find_type(((sval*)front(A))->type), find_type(SVAL_QEXPR)); 
-	ERRCHECK(a, ((sval*)front(A))->count != 0, 
-		"Function 'tail' passed { }!"); 
+	ERRCHECK_NUM("tail", a, 1); 
+	ERRCHECK_TYPE("tail", a, 0, SVAL_QEXPR); 
+	ERRCHECK_NOT_EMPTY("tail", a, 0); 
 
 	sval* v = take(a, 0); 
-	/* Resolve the remainder */  
-	free_sval(pop(v, 0)); 
+	free_sval(pop(v, 0));
 	return v; 
 }
 
@@ -685,43 +627,31 @@ sval* builtin_list(env* e, sval* a) {
 
 /* Join: composes multiple Q-expressions */ 
 sval* join_helper(sval* x, sval* y) {
-	/* Add each cell in 'y' to 'x' */ 
-	while (y->count) {
-		x = sval_compose(x, pop(y, 0)); 
+	for (int i = 0; i < y->count; i++) {
+		x = sval_compose(x, y->cell[i]); 
 	}
-
 	/* Discard 'y' */ 
 	free_sval(y); 
 	return x; 
 }
 
 sval* builtin_join(env* e, sval* a) {
-	List A = a->children; 
-	/* Validate args */ 
-	if (A && length(A) > 0) {
-		moveFront(A); 
-		while (idx(A) >= 0) {
-			ERRCHECK(a, ((sval*)get(A))->type == SVAL_QEXPR, 
-				"Function 'join' passed the incorrect type."); 
-		}
+	for (int i = 0; i < a->count; i++) {
+		ERRCHECK_TYPE("join", a, i, SVAL_QEXPR); 
 	}
-
 	sval* x = pop(a, 0); 
 	while (a->count) {
-		x = join_helper(x, pop(a, 0)); 
+		sval* y = pop(a, 0); 
+		x = join_helper(x, y); 
 	}
-
-	/* x reaplces a as the joined expression */ 
 	free_sval(a); 
 	return x; 
 }
 
 /* Eval: converts Q-Expr to S-Expr and evaluates */ 
 sval* builtin_eval(env* e, sval* a) {
-	ERRCHECK(a, a->count == 1, 
-		"Function 'eval' passed too many arguments!"); 
-	ERRCHECK(a, ((sval*)front(a->children))->type == SVAL_QEXPR, 
-		"Function 'eval' passed the incorrect type!"); 
+	ERRCHECK_NUM("eval", a, 1); 
+	ERRCHECK_TYPE("eval", a, 0, SVAL_QEXPR); 
 
 	sval* x = take(a, 0); 
 	x->type = SVAL_SEXPR; 
@@ -753,64 +683,52 @@ void env_add_builtin(env* e, char* name, sbuiltin func) {
 
 /* Setting variables */ 
 sval* set_var(env* e, sval* a, char* func) {
-	/* TODO: Implement type-checking here */ 
+	ERRCHECK_TYPE(func, a, 0, SVAL_QEXPR); 
 
-	/* Parse binding name */ 
-	sval* symbols = (sval*)front(a->children); 
-	List S = symbols->children; 
-	List A = a->children; 
-	/* Verify name */ 
-	if (S && length(S) > 0) {
-		moveFront(S); 
-		while (idx(S) >= 0) {
-			ERRCHECK(a, ((sval*)get(S))->type == SVAL_SYM, 
-			"Function '%s' cannot define a non-symbol. "
-			"Got %s, expected %s.", func, 
-			find_type(((sval*)get(S))->type), find_type(SVAL_SYM)); 
-			moveNext(S); 
-		}
-	} else { printf("Unexpected error in set_var(), list empty?"); exit(EXIT_FAILURE); } 
-
-	ERRCHECK(a, (symbols->count == a->count - 1), 
-		"Function '%s' was passed too many arguments for symbols. "
-		"Got %i, expecting %i.", func, symbols->count, a->count -1); 
-
-	/* "def" sets global bindings, "=" is a local binding */ 
-	moveFront(S); moveFront(A); moveNext(A); /* Advance A one past S */ 
+	sval* symbols = a->cell[0]; 
 	for (int i = 0; i < symbols->count; i++) {
-		if (strcmp(func, "def") == 0) {
-			def_env(e, (sval*)get(S), (sval*)get(A)); 
-		}
-		if (strcmp(func, "=") == 0) {
-			set_env(e, (sval*)get(S), (sval*)get(A)); 
-		}
-		moveNext(S); moveNext(A); 
+		ERRCHECK(a, (symbols->cell[i]->type == SVAL_SYM),
+      "Function '%s' cannot define non-symbol. "
+      "Got %s, Expected %s.", func, 
+      find_type(symbols->cell[i]->type), find_type(SVAL_SYM));
+  }
+  
+  ERRCHECK(a, (symbols->count == a->count-1),
+    "Function '%s' passed too many arguments for symbols. "
+    "Got %i, Expected %i.", func, symbols->count, a->count-1);
+
+  for (int i = 0; i < symbols->count; i++) {
+  	/* If 'def' define in globally. If '=' define local binding */
+  	if (strcmp(func, "def") == 0) {
+   	  def_env(e, symbols->cell[i], a->cell[i+1]);
+  	}
+  
+  	if (strcmp(func, "=")   == 0) {
+    	set_env(e, symbols->cell[i], a->cell[i+1]);
+  	} 
 	}
 
-	/* Free a and return an empty S-Expr */ 
 	free_sval(a); 
 	return sexpr(); 
 } 
 
 /* Defines user-entered functions */ 
 sval* builtin_lambda(env* e, sval* a) {
+	/* requires exactly two Q-expr arguments */ 
+	ERRCHECK_NUM("\\", a, 2); 
+	ERRCHECK_TYPE("\\", a, 0, SVAL_QEXPR); 
+	ERRCHECK_TYPE("\\", a, 1, SVAL_QEXPR); 
 
-	/* PRE: exactly two arguments, both qexpr. TODO: IMPLEMENT */
-	List A = ((sval*)front(a->children))->children; /* first qexpr arg */ 
-	if (A && length(A) > 0) {
-		moveFront(A); 
-		while (idx(A) >= 0) {
-			ERRCHECK(a, ((sval*)get(A))->type == SVAL_SYM, 
-			"Cannot define a non-symbol. "
-			"Got %s, expected %s.", 
-			find_type(((sval*)get(A))->type), find_type(SVAL_SYM)); 
-			moveNext(A); 
-		}
-	} else { printf("Unexpected error in builtin_lambda(), list empty?"); exit(EXIT_FAILURE); }
+	/* The first Q-expr should contain symbols only (the args) */ 
+	for (int i = 0; i < a->cell[0]->count; i++) {
+		ERRCHECK(a, (a->cell[0]->cell[i]->type == SVAL_SYM), 
+			"Nonsymbol argument. Unexpected type: %s", 
+			find_type(a->cell[0]->cell[i]->type)); 
+	}
 
-	/* Pop the first two arguments, pass them as formal args and fcn body */ 
+	/* Pop the first two arguments and construct a lambda */ 
 	sval* formals = pop(a, 0); 
-	sval* body 		= pop(a, 0); 
+	sval* body = pop(a, 0); 
 	free_sval(a); 
 
 	return lambda(formals, body); 
@@ -818,9 +736,10 @@ sval* builtin_lambda(env* e, sval* a) {
 
 /* Call: Evaluates a function, either user-defined or global */ 
 sval* call(env* e, sval* f, sval* a) {
+	/* Is it a builtin function? */ 
 	if (f->builtin) { return f->builtin(e, a); }
 
-	/* record argument counts */ 
+	/* Not builtin, record argument counts */ 
 	int given = a->count; 
 	int total = f->formals->count; 
 
@@ -828,7 +747,7 @@ sval* call(env* e, sval* f, sval* a) {
 		/* No formal arguments remain */ 
 		if (f->formals->count == 0) {
 			free_sval(a); return error(
-				"Function construction failed, too many arguments! "
+				"Function evaluation failed, too many arguments! "
 				"Got %i, only space for %i.", given, total); 
 		}
 		
@@ -859,7 +778,7 @@ sval* call(env* e, sval* f, sval* a) {
 
 	/* If VA symbols remain, bind to an empty list */ 
 	if (f->formals->count > 0 
-		&& strcmp(((sval*)front(f->formals->children))->sym, "...") == 0) {
+		&& strcmp(f->formals->cell[0]->sym, "...") == 0) {
 
 		/* verify that '...' doesn't stand alone */ 
 		if (f->formals->count != 2) {
@@ -881,6 +800,7 @@ sval* call(env* e, sval* f, sval* a) {
 
 	/* If the number of arguments matched expectations, evaluate */ 
 	if (f->formals->count == 0) {
+		/* set parent environment */ 
 		f->env->parent = e; 
 		return builtin_eval(
 			f->env, sval_compose(sexpr(), copy_sval(f->body))); 
