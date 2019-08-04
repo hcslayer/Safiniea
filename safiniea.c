@@ -12,6 +12,7 @@
  *					[*] First draft done. Need to wring out the bugs. 
  *					[ ] Test expected behavior and document. 
  *			[*] Convert static arrays to linked lists. 
+ *			[ ] Convert linked lists back to static arrays 
  *			[ ] Review how everything actually works. 
  *			[*] Hot comment boxes for everything 
  * 			[ ] Merge this branch with master. 
@@ -88,9 +89,6 @@ char* find_type(value_type t) {
 		free_sval(args); \
 		return err; \
 	}
-/**
- * These haven't been properly integrated. On the list 
- * 
 #define ERRCHECK_TYPE(func, args, index, expect) \
   ERRCHECK(args, args->cell[index]->type == expect, \
     "Function '%s' passed incorrect type for argument %i. " \
@@ -102,7 +100,8 @@ char* find_type(value_type t) {
     "Function '%s' passed incorrect number of arguments. " \
     "Got %i, Expected %i.", \
     func, args->count, num)
-*/ 
+
+/* Primary data type */ 
 
 typedef struct sval {
 	value_type type; 
@@ -119,8 +118,8 @@ typedef struct sval {
 	sval* body; 
 
 	/* Nested elements */
-	List children; 
 	int count;
+	sval** cell; 
 } sval; 
 
 /* Sub-type constructors */
@@ -165,7 +164,7 @@ sval* sexpr(void) {
 	sval* v = malloc(sizeof(sval)); 
 	v->type = SVAL_SEXPR; 
 	v->count = 0; 
-	v->children = newList(); 
+	v->cell = NULL;  
 	return v; 
 }
 
@@ -174,7 +173,7 @@ sval* qexpr(void) {
 	sval* v = malloc(sizeof(sval)); 
 	v->type = SVAL_QEXPR;
 	v->count = 0; 
-	v->children = newList();
+	v->cell = NULL; 
 	return v; 
 }
 
@@ -184,6 +183,20 @@ sval* fun(sbuiltin func) {
 	v->type = SVAL_FUN; 
 	v->builtin = func; 
 	return v; 
+}
+
+env* new_env(void); 
+
+/* User-defined function (lambda) */ 
+sval* lambda(sval* formals, sval* body) {
+	sval* v = malloc(sizeof(sval)); 
+	v->type = SVAL_FUN; 
+	/* null builtin is the signal */ 
+	v->builtin = NULL; 
+	v->env = new_env(); 
+	v->formals = formals; 
+	v->body = body;
+	return v;  
 }
 
 /* Environment structure */ 
@@ -203,24 +216,11 @@ env* new_env(void) {
 	return e; 
 }
 
-/* Lambda value (user generated fcn) */ 
-sval* lambda(sval* formals, sval* body) {
-	sval* v = malloc(sizeof(sval)); 
-	v->type = SVAL_FUN; 
-	/* null builtin is the signal */ 
-	v->builtin = NULL; 
-	v->env = new_env(); 
-	v->formals = formals; 
-	v->body = body;
-	return v;  
-}
 
 /* Destructors */ 
 void free_env(env* e); 
-void free_sval(sval* v); 
 
 void free_sval(sval* v) {
-	if (!v) { return; }
 
 	switch(v->type) {
 		case SVAL_NUM: break;  
@@ -230,9 +230,12 @@ void free_sval(sval* v) {
 
 		case SVAL_SEXPR: 
 		case SVAL_QEXPR:
-			freeList(&(v->children));  
+			for (int i = 0; i < v->count; i++) {
+				free_sval(v->cell[i]); 
+			}
+			free(v->cell); 
 			break; 
-
+		
 		case SVAL_FUN: 
 			if (!v->builtin) {
 				free_env(v->env); 
@@ -245,26 +248,19 @@ void free_sval(sval* v) {
 }
 
 void free_env(env* e) {
-	if (e) {
-		printf("calling free_env()\n"); 
-		for (int i = 0; i < e->count; i++) {
-			free(e->syms[i]); 
-			free_sval(e->vals[i]); 
-		}
-		free(e->syms); 
-		free(e->vals); 
-		free(e);
+	for (int i = 0; i < e->count; i++) {
+		free(e->syms[i]); 
+		free_sval(e->vals[i]); 
 	}
+	free(e->syms); 
+	free(e->vals); 
+	free(e);
 }
 
 /********************/ 
 /** Copy functions **/
 /********************/
-
-sval* copy_sval(sval* v); 
 env* copy_env(env* e); 
-List copy_list(List L); 
-
 
 sval* copy_sval(sval* v) {
 	/* Initialize duplicate */ 
@@ -288,7 +284,10 @@ sval* copy_sval(sval* v) {
 		case SVAL_SEXPR:
 		case SVAL_QEXPR:
 			x->count = v->count; 
-			x->children = copy_list(v->children); 
+			x->cell = malloc(sizeof(sval*) * v->count); 
+			for (int i = 0; i < v->count; i++) {
+				x->cell[i] = copy_sval(v->cell[i]); 
+			}
 			break;
 		
 		case SVAL_FUN: 
@@ -319,28 +318,11 @@ env* copy_env(env* e) {
 	return n; 
 }
 
-List copy_list(List L) {
-	if (!L) { return newList(); } /* FIXME: Do proper list error handling */ 
-	List C = newList(); 						/* FIXME: Lint List camel-case to GNU std */ 
-	sval* v; 
-	if (length(L) > 0) {
-		moveFront(L); 
-		while (idx(L) >= 0) {
-			v = (sval*)get(L); 
-			append(C, v); 
-			moveNext(L); 
-		}
-	}
-	return C; 
-}
-
-/* S-Expression helper: nests one sexpr inside the other */ 
-sval* sexpr_compose(sval* v, sval* x) {
-	if (!v->children) {
-		v->children = newList(); 
-	}
+/* Links one sval to the tail of another */ 
+sval* sval_compose(sval* v, sval* x) {
 	v->count++; 
-	append(v->children, x); 
+	v->cell = realloc(v->cell, sizeof(sval*) * v->count); 
+	v->cell[v->count-1] = x; 
 	return v; 
 }
 
@@ -441,8 +423,8 @@ sval* sval_read(mpc_ast_t* t) {
 		if (strcmp(t->children[i]->contents, "{") == 0) {continue;}
 		if (strcmp(t->children[i]->contents, "}") == 0) {continue;}
 		if (strcmp(t->children[i]->tag,  "regex") == 0) {continue;}
-		printf("calling sexpr_compose()\n"); 
-		x = sexpr_compose(x, sval_read(t->children[i])); 
+		printf("calling sval_compose()\n"); 
+		x = sval_compose(x, sval_read(t->children[i])); 
 	}
 	return x; 
 }
@@ -521,8 +503,8 @@ sval* evaluate(env* e, sval* v) {
 }
 
 /* Swap: a list helper for evaluate_sexpr */ 
-void swap(List L, sval* x) {
-	int target_index = idx(L);
+void swap(List L, sval* x, int i) {
+	int target_index = i;
 	printf("Target index: %d\n", target_index);  
 	insertBefore(L, x); /* insert new element */ 
 	delete(L); /* delete old element at target idx */ 
@@ -540,9 +522,9 @@ sval* evaluate_sexpr(env* e, sval* v) {
 	for (int i = 0; i < v->count; i++) {
 		sval* child_eval = evaluate(e, get(children));
 		printf("swapping... "); 
-		swap(children, child_eval); 
+		swap(children, child_eval, i); 
 		printf(" complete.\n"); 
-		moveNext(children); 
+		//moveNext(children); 
 	}
 
 	/* Check for error propogation */
@@ -608,16 +590,13 @@ sval* builtin_op(env* e, sval* a, char* op) {
 	}
 
 	/* Verify that input are numbers */ 
-	List A = a->children; 
-	if (A && length(A) > 0) {
-		moveFront(A);
-		while (idx(A) >= 0) {
-			if (((sval*)get(A))->type != SVAL_NUM) {
-				free_sval(a); 
-				return error("%s Error: Cannot operate on non-number arguments", op); 
-			}
-			moveNext(A); 
+	List A = a->children;
+	moveFront(A); 
+	for (int i = 0; i < a->count; i++) {
+		if (((sval*)get(A))->type != SVAL_NUM) {
+			return error("%s Error: Expected number operand.", op); 
 		}
+		moveNext(A); 
 	}
 
 	/* Pop the first element */ 
@@ -708,7 +687,7 @@ sval* builtin_list(env* e, sval* a) {
 sval* join_helper(sval* x, sval* y) {
 	/* Add each cell in 'y' to 'x' */ 
 	while (y->count) {
-		x = sexpr_compose(x, pop(y, 0)); 
+		x = sval_compose(x, pop(y, 0)); 
 	}
 
 	/* Discard 'y' */ 
@@ -904,7 +883,7 @@ sval* call(env* e, sval* f, sval* a) {
 	if (f->formals->count == 0) {
 		f->env->parent = e; 
 		return builtin_eval(
-			f->env, sexpr_compose(sexpr(), copy_sval(f->body))); 
+			f->env, sval_compose(sexpr(), copy_sval(f->body))); 
 	} 
 	else { /* Partial function definition */ 
 		return copy_sval(f); 
