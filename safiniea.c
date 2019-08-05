@@ -1012,6 +1012,7 @@ sval* builtin_load(env* e, sval* a) {
 
 		/* evaluate */ 
 		while (expr->count) {
+			printf("evaluating... "); 
 			sval* x = evaluate(e, pop(expr, 0)); 
 
 			/* print any errors */ 
@@ -1157,38 +1158,38 @@ int main(int argc, char* argv[]) {
 
 			free_sval(x); 
 		}
-	}
+	} 
+	else { 
+		/* REPL */ 
+		while (true) {
 
-	/* REPL */ 
-	while (true) {
+			char* input = readline("\n∞ > ");
+			add_history(input);
 
-		char* input = readline("\n∞ > ");
-		add_history(input);
+			/* Parse user input */ 
+			mpc_result_t r; 
+			if (mpc_parse("<stdin>", input, CatchAll, &r)) {
+				/* Diagnostic: print AST */ 
+				mpc_ast_print(r.output);
+				sval* x = evaluate(e, sval_read(r.output)); 
+				print_valueln(x);
+				free_sval(x); 
+				mpc_ast_delete(r.output); 
+			} 
+			/* Parsing error */ 
+			else {
+				mpc_err_print(r.error); 
+				mpc_err_delete(r.error); 
+			}
 
-		/* Parse user input */ 
-		mpc_result_t r; 
-		if (mpc_parse("<stdin>", input, CatchAll, &r)) {
-			/* Diagnostic: print AST */ 
-			mpc_ast_print(r.output);
-			sval* x = evaluate(e, sval_read(r.output)); 
-			print_valueln(x);
-			free_sval(x); 
-			mpc_ast_delete(r.output); 
-		} 
-		/* Parsing error */ 
-		else {
-			mpc_err_print(r.error); 
-			mpc_err_delete(r.error); 
+			free(input); 
 		}
 
-		free(input); 
+		/* Clean up */ 
+		free_env(e); 
+		mpc_cleanup(8, Number, String, Comment,
+		String, Sexpr, Qexpr, Expr, CatchAll); 
 	}
-
-	/* Clean up */ 
-	free_env(e); 
-	mpc_cleanup(8, Number, String, Comment,
-	String, Sexpr, Qexpr, Expr, CatchAll); 
-
 	exit(EXIT_SUCCESS); 
 }
 

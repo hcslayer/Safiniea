@@ -1,0 +1,39 @@
+:: stdlib.saf
+
+:: atoms 
+(def {nil} {})
+(def {help} (\ load "help.saf"))
+(def {tutorial} (\ load "tutorial.saf"))
+
+:: function definition 
+(def {fun} (\ {f b} {
+	def (head f) (\ (tail f) b)
+	}))
+
+:: pack 
+(fun {pack f ... xs} {f xs})
+
+:: unpack
+(fun {unpack f l} {
+	eval (join (list f) l)
+})
+
+:: curried / uncurried calls 
+(def {curry} unpack)
+(def {uncurry} pack) 
+
+:: do (looping) 
+(fun {do ... l} {
+	if (=== l nil)
+		{nil}
+		{last l}
+})
+
+:: local scoping 
+:: builds a micro scope for var x 
+(fun {let x} {
+	((\ {_} b) ())
+})
+
+:: function composition 
+(fun {comp} {f g x} {f (g x)})
