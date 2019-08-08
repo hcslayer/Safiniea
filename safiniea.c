@@ -12,10 +12,10 @@
  *					[*] First draft done. Need to wring out the bugs. 
  *					[ ] Test expected behavior and document. 
  *			[*] Convert static arrays to linked lists. 
- *			[ ] Convert linked lists back to static arrays 
+ *			[*] Convert linked lists back to static arrays 
  *			[ ] Review how everything actually works. 
  *			[*] Hot comment boxes for everything 
- * 			[ ] Merge this branch with master. 
+ * 			[*] Merge this branch with master. 
  */ 
 
 #include<stdio.h> 
@@ -371,6 +371,15 @@ sval* sval_compose(sval* v, sval* x) {
 	v->cell = realloc(v->cell, sizeof(sval*) * v->count); 
 	v->cell[v->count-1] = x; 
 	return v; 
+}
+
+sval* sval_join(sval* x, sval* y) {
+	for (int i = 0; i < y->count; i++) {
+		x = sval_compose(x, y->cell[i]); 
+	}
+	free(y->cell); 
+	free(y); 
+	return x; 
 }
 
 /**************************/ 
@@ -763,25 +772,35 @@ sval* builtin_list(env* e, sval* a) {
 	return a; 
 }
 
-/* Join: composes multiple Q-expressions */ 
-sval* join_helper(sval* x, sval* y) {
-	for (int i = 0; i < y->count; i++) {
-		x = sval_compose(x, y->cell[i]); 
-	}
+/* String concat helper */ 
+sval* join_str(sval* x, sval* y) {
+	x->str = realloc(x->str, strlen(x->str)+strlen(y->str)+1); 
+	strcat(x->str, y->str); 
 	/* Discard 'y' */ 
 	free_sval(y); 
 	return x; 
 }
 
+/* Join: Composes Q-expressions and strings */ 
 sval* builtin_join(env* e, sval* a) {
+	/* Parse first argument to determine type */ 
+	value_type t; 
+	if (a->count && a->cell[0]->type == SVAL_QEXPR) {
+		t = SVAL_QEXPR;
+	} else { t = SVAL_STR; }
+	
+	/* Verify that arguments are correct */ 
 	for (int i = 0; i < a->count; i++) {
-		ERRCHECK_TYPE("join", a, i, SVAL_QEXPR); 
+		ERRCHECK_TYPE("join", a, i, t); 	 
 	}
+
 	sval* x = pop(a, 0); 
 	while (a->count) {
 		sval* y = pop(a, 0); 
-		x = join_helper(x, y); 
+		if (t == SVAL_QEXPR) { x = sval_join(x, y); }
+		else { x = join_str(x, y); }
 	}
+
 	free_sval(a); 
 	return x; 
 }
@@ -1007,12 +1026,12 @@ sval* builtin_load(env* e, sval* a) {
 	if (mpc_parse_contents(a->cell[0]->str, CatchAll, &r)) {
 
 		/* read */ 
+		mpc_ast_print(r.output); 
 		sval* expr = sval_read(r.output); 
 		mpc_ast_delete(r.output); 
 
 		/* evaluate */ 
 		while (expr->count) {
-			printf("evaluating... "); 
 			sval* x = evaluate(e, pop(expr, 0)); 
 
 			/* print any errors */ 
