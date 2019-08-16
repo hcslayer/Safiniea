@@ -23,7 +23,6 @@
 #include<stdbool.h>
 #include<math.h> 
 #include"mpc.h" 		/* Deep thanks to orangeduck for inspiration and guidance! */ 
-#include"List.h"
 
 /* Windows-specific configuration */ 
 #ifdef 		_WIN32 
@@ -261,6 +260,7 @@ env* new_env(void) {
 void free_env(env* e); 
 
 void free_sval(sval* v) {
+	//if (!v) { return; }
 
 	switch(v->type) {
 		case SVAL_NUM: break;
@@ -595,10 +595,10 @@ sval* evaluate_sexpr(env* e, sval* v) {
 }
 
 /* Pop : removes an element from the list, leaving the remainder in tact */ 
-sval* pop(sval* v, int i) {
+sval* pop(sval* v, int i) { 
 	sval* x = v->cell[i]; 
 	memmove(&v->cell[i], &v->cell[i+1], 
-		sizeof(sval*) * v->count-i-1); 
+		sizeof(sval*) * (v->count-i-1)); 
 	v->count--;
 	v->cell = realloc(v->cell, sizeof(sval*) * v->count); 
 	return x; 
@@ -768,7 +768,7 @@ sval* builtin_tail(env* e, sval* a) {
 
 /* List: converts a Q-Expr to an S-Expr */ 
 sval* builtin_list(env* e, sval* a) {
-	a->type = SVAL_QEXPR; 
+	a->type = SVAL_SEXPR; 
 	return a; 
 }
 
@@ -951,16 +951,19 @@ sval* call(env* e, sval* f, sval* a) {
 		sval* symbol = pop(f->formals, 0); 
 
 		/* Variable argument definition */ 
-		if (strcmp(symbol->sym, "...") == 0) { 
+		if (strcmp(symbol->sym, "~") == 0) { 
+			
 			if (f->formals->count != 1) {
 				free_sval(a); 
 				return error("Variable Argument definition invalid. "
-					"'...' is to be followed by a single symbol. "); 
+					"'~' is to be followed by a single symbol. "); 
 			}
+			
 			/* next formal is set to remaining arguments */ 
 			sval* nsym = pop(f->formals, 0); 
 			set_env(f->env, nsym, builtin_list(e, a)); 
-			free_sval(symbol); free_sval(nsym); 
+			free_sval(symbol); free_sval(nsym);
+			break; 
 		}
 
 		/* Standard definition */ 
@@ -974,12 +977,12 @@ sval* call(env* e, sval* f, sval* a) {
 
 	/* If VA symbols remain, bind to an empty list */ 
 	if (f->formals->count > 0 
-		&& strcmp(f->formals->cell[0]->sym, "...") == 0) {
+		&& strcmp(f->formals->cell[0]->sym, "~") == 0) {
 
 		/* verify that '...' doesn't stand alone */ 
 		if (f->formals->count != 2) {
 			return error("Function definition invalid. "
-				"'...' must be followed by a single symbol."); 
+				"'~' must be followed by a single symbol."); 
 		}
 
 		/* pop and delete '...' */ 
@@ -1139,7 +1142,7 @@ int main(int argc, char* argv[]) {
 	mpca_lang(MPCA_LANG_DEFAULT, 
 	"																			   							 \
 		number   : /-?[0-9]+/ ; 							 							 \
-		symbol   : /[a-zA-Z0-9_+\\-*\\/\\\\=<>%!&]+/ ;			 \
+		symbol   : /[a-zA-Z0-9_+\\-*\\/\\\\=<>%!&~]+/ ;			 \
 		string   : /\"(\\\\.|[^\"])*\"/ ; 									 \
 		comment  : /::[^\\r\\n]*/	;													 \
 	  sexpr    : '(' <expr>* ')' ; 												 \
