@@ -16,17 +16,17 @@ Safiniea also supports a number of features uncommon in other languages, such as
 
 Safiniea can be run in two ways, both from the CLI. Simply running `prompt` or `./prompt` will fire up a console session, where you can type your Saf code into stdin and play around. 
 
-Alternatively, you can do `./prompt file1 file2 ... ` to load files into the program. Each file will be parsed and evaluated in the sequence provided, and any and all outputs will be logged to the console. Be sure to wrap all statements in `( ... )`, so that they will be properly parsed and evaluated. Otherwise, things will yell at you. 
+Alternatively, you can do `./prompt file1 file2 ... ` to load files into the program. Each file will be parsed and evaluated in the sequence provided, and any and all outputs will be logged to the console. When writing your `.saf` source code files, be sure to wrap all statements in `( ... )`, so that they will be properly parsed and evaluated. Otherwise, the parser will yell at you, or worse, silently betray you. 
 
-In Safiniea, there are two main types of expressions: S `( ... )` and Q `{ ... } `. S-Expressions represent, more or less loosely, evaluable statements, while Q-Expressions are not evaluated. A single operator followed by an appropriately-formatted list of operands does not require padding in parentheses, however, more complex statements and compound expressions will likely use a combination of both. 
+In Safiniea, there are two main types of expressions: S `( ... )` and Q `{ ... } `. S-Expressions represent, more or less loosely, evaluable statements, while Q-Expressions are not evaluated. A single operator followed by an appropriately-formatted list of operands does not require padding in parentheses, however, more complex statements and compound expressions will likely use a combination of S-expressions, Q-expressions, and naked argument lists. 
 
-All strings must be enclosed in double inverted commas. 
+All strings must be enclosed in double inverted commas `""`. 
 
-Comments begin with `::` and are terminated by the first newline character encountered.  
+Comments begin with double colons `::` and are terminated by the first newline character encountered.  
 
 ##### A quick note about syntax 
 
-Safiniea uses reverse Polish syntax for all operations. It may be a bit unfamiliar, but I've found that it wears well. For the user unfamiliar with reverse Polish syntax, the general gist is that `<op1> <operator> <op2>` becomes `<operator> <op1> <op2> ...`
+Safiniea uses reverse Polish syntax for all operations. It may be a bit unfamiliar at the onset, but I've found that it wears well. For the user unfamiliar with reverse Polish syntax, the general gist is that `<op1> <operator> <op2>` becomes `<operator> <op1> <op2> ...`
 
 In other words, `(x + y)` is `(+ x y)`  
 `8 * (7 + 3 (8 - 5))` would be `* 8 (+ 7 (* 3 (- 8 5)))`, etc. 
@@ -130,6 +130,7 @@ Most arithmetic in Safiniea is relatively intuitive. Zero division throws errors
 ---
 
 ##### Built-In Functions  
+The following functions are hard-coded into the program itself. The standard library builds on this core set of builtins.
 
 `function name` : description goes here 
 
@@ -163,6 +164,27 @@ Most arithmetic in Safiniea is relatively intuitive. Zero division throws errors
 
 ---
 
+##### Standard Library 
+
+The standard library, which is obtained by doing `load "stdlib.saf"` adds some additional quirky functions, about a third of which are actually useful! A quick summary of these follows, though the reader is encouraged to explore the stdlib functions *not* included on this list. 
+
+`fun { <function name> arg1 arg2 ... } { <function body> } ` gives us a cleaner and more concise way to define functions. Note that the first Q-expression passed to `fun` places the function name as the first argument, followed by the formal arguments for the function itself. The function body is simply the code to be executed each time the function is called. 
+
+`do <expr1> <expr2> ... <expr n>` evaluates `n` expressions in a sequence, and then returns the result of the final one. 
+
+`len <list>` returns the length of a list. 
+
+`caboose <list>` returns the last element in a list 
+
+`makeset n <list>` makes a new list from the first `n` elements of the list. 
+
+`prune n <list> ` returns a new list, with the first `n` elements of the original list removed. 
+
+`forEach fcn <list> ` applies fcn to each element of the list, and returns a list of the evaluated results. 
+
+
+---
+
 ##### Bindings 
 
 
@@ -170,15 +192,17 @@ There's two ways to define a binding (or a variable) in this language, based on 
 
 To update the global scope, do 
 
-` def { binding name }  < binding value > `
+` def { binding name }  <binding value> `
+
+This is equivalent to defining a `const` or a `global`, and the binding will be accessible in any scope, provided that it isn't overridden by a local variable of the same name. 
 
 To update the local scope (which, outside of a function, is also the top scope), do 
 
-` = { binding name } < binding value > `
+` = { binding name } <binding value> `
 
-To check the value of a binding (at least in the console) you can just enter `< binding name >`, which returns whatever value or expression associated with the binding. 
+To check the value of a binding (at least in the console) you can just enter `<binding name>`, which returns whatever value or expression associated with the binding. 
 
-The difference between these two methods of defining a binding are more significant on the back end of things. If you're playing around in the REPL loop, I would recommend just using `def`, as it feels a bit more clear. If you want to write your own programs in the language, the definition becomes more important. Defining a binding inside of a function using `=` will create a local variable scoped by that function. Definining a binding inside of a function with `def` is equivalent to defining a global constant inside of the function body, and the value will be accessible outside of the local scope. 
+The difference between these two methods of defining a binding are more significant on the back end of things. If you're playing around in the REPL loop, I would recommend just using `def`, as it feels a bit more clear. If you want to write your own programs in the language, the delineation between `=` and `def` becomes more important. Defining a binding inside of a function using `=` will create a local variable scoped by that function. Definining a binding inside of a function with `def` is equivalent to defining a global constant inside of the function body, and the value will be accessible outside of the local scope. 
 
 In either case, bindings persist for the duration of the program, and can be updated or modified at will. This also means that you can alter the standard library definitions, so be cautious about over-writing things unintentionally.
 
@@ -186,27 +210,39 @@ In either case, bindings persist for the duration of the program, and can be upd
 
 ##### Conditionals / Comparisons  
 
+Safiniea supports a boolean type, but it's a bit more of an internal feature at the present moment. Soon, literal `true` and `false` values will be supported, but for now, the only way to get those values is by using some combination of `===, ==, !=, <, >, <= ...`
+
+There's two different types of equality operators. The triple equals `===` is used for comparing non-integer types (think of it as a deep comparison), while the shallow comparison (arithmetic comparison) is handled by `==`. 
+
+The rest of our friends, `> < != == <= >=`, operate as expected. Note that unlike some of the other arithmetic operators, these are strictly binary, and you will throw errors if more than two arguments are passed to any one. 
+
 ---
 
 ##### Strings 
 
----
-
-##### Function Definition 
+Strings are any content enclosed in `"..."`. At the present, strings can be `join`ed and `print`ed. `print` simply returns the string to stdout, and `join` concatenates two (or more) strings and returns the result. 
 
 ---
 
 ##### Partial Function Definition
 
+This is a neat feature of the language, see if you can figure out how it works... 
+
 ---
 
 ##### Loading Files 
 
-Put in a word here about format. Enclose each 'statement', so to speak, in an S-Expression. That's how we denote a line of executible code. Comments are denoted by '::' 
+You can write Safiniea code and load it. Simply follow the `./prompt` command with the file(s) that you want to run. 
+
+It's important to note that any statement you write in `.saf` code must be wrapped in `(...)`, otherwise wild errors abound. Comments, as mentioned earlier, span a single line and are denoted by `::`.
+
+Other than these two guidelines, type away! I'm confident that you'll discover bugs I never did, or ways to break the language. *Honestly, please do*.   
 
 ---
 
 ## Under the Hood 
+
+Coming soon. 
 
 --- 
 
@@ -218,15 +254,15 @@ Put in a word here about format. Enclose each 'statement', so to speak, in an S-
 
 -  ~~Something is being freed too many times, throws a malloc bp. I think that it has to do with the free_env() function.~~ 
 -  ~~Verify that function definition works.~~ 
--  Track down the segfaults associated with variable argument functions 
--  Verify that partial function definition works 
--  Verify that currying-uncurrying works 
--  Verify all arithmetic operations 
--  Verify Q-expr operations (head, tail, list) 
+-  ~~Track down the segfaults associated with variable argument functions~~ 
+-  ~~Verify that partial function definition works~~ 
+-  ~~Verify that currying-uncurrying works~~ 
+-  ~~Verify all arithmetic operations~~ 
+-  ~~Verify Q-expr operations (head, tail, list)~~ 
 -  ~~Verify that bindings are preserved through a session~~ 
--  Verify that variable-argument functions work as expected 
+-  ~~Verify that variable-argument functions work as expected~~ 
 -  ~~Test and evaluate load functions~~ 
--  Test standard library functions 
+-  ~~Test standard library functions~~ 
 
 
 #### Looking Ahead 

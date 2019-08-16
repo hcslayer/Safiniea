@@ -25,7 +25,7 @@
 
 :: do (looping) 
 (fun {do ~ l} {
-	if (=== l nil)
+	!if {=== l nil}
 	{nil}
 	{last l}
 })
@@ -37,3 +37,51 @@
 })
 
 :: function composition 
+
+
+:: list functionality 
+(fun {fst l} { eval (head l) })
+(fun {snd l} { eval (head (tail l))})
+(fun {thd l} { eval (head (tail (tail l)))})
+
+:: list length 
+(fun {len l} {
+	!if {=== l nil} 
+		{0}
+		{+ (len (tail l))}
+})
+
+:: access an item in a list 
+(fun {grab n l} {
+	!if {== n 0} 
+		{fst l}
+		{nth (- n 1) (tail l)}
+})
+
+:: access the last element in a list 
+(fun {caboose l} {
+	nth (- (len l) 1) l
+})
+
+:: take the first n items in a list 
+(fun {makeset n l} {
+	!if {== n 0} 
+	{nil}
+	{join (head l) (grab (- n 1) (tail l))} 
+})
+
+:: drop the first n items from a list 
+(fun {prune n l} {
+	!if {== n 0} 
+	{l}
+	{prune (- n 1) (tail l)}
+})
+
+:: mapping functions over a list 
+(fun {forEach f l} {
+	!if {=== l nil} 
+	{nil}
+	{join (list (f (fst l))) (forEach f (tail l))}
+})
+
+:: note to self -> need to fix the join function. 
