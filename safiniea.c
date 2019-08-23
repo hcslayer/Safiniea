@@ -627,23 +627,10 @@ sval* builtin_op(env* e, sval* a, char* op) {
 		printf("Goodbye!\n"); 
 		/* implement an exit function */ 
 		exit(EXIT_SUCCESS); 
-
-<<<<<<< HEAD
-	/* Verify that input are numbers */ 
-	List A = a->children; 
-	moveFront(A);
-	for (int i = 0; i < a->count; i++) {
-		if (((sval*)get(A))->type != SVAL_NUM) {
-			free_sval(a); 
-			return error("%s Error: Cannot operate on non-number arguments", op); 
-		}
-		moveNext(A); 
-=======
 	}
 	
 	for (int i = 0; i < a->count; i++) {
 		ERRCHECK_TYPE(op, a, i, SVAL_NUM); 
->>>>>>> a475f575bc48c653b402002dc7cd151900f83767
 	}
 
 	sval* x = pop(a, 0); 
@@ -784,22 +771,10 @@ sval* builtin_list(env* e, sval* a) {
 	return a; 
 }
 
-<<<<<<< HEAD
-/* Join: composes multiple Q-expressions */ 
-sval* join_helper(sval* x, sval* y) {
-	/* Add each cell in 'y' to 'x' */ 
-	List Y = y->children; 
-	moveFront(Y); 
-	while (idx(Y) >= 0) {
-		sexpr_compose(x, get(Y)); 
-		moveNext(Y); 
-	}
-=======
 /* String concat helper */ 
 sval* join_str(sval* x, sval* y) {
 	x->str = realloc(x->str, strlen(x->str)+strlen(y->str)+1); 
 	strcat(x->str, y->str); 
->>>>>>> a475f575bc48c653b402002dc7cd151900f83767
 	/* Discard 'y' */ 
 	free_sval(y); 
 	return x; 
@@ -904,17 +879,8 @@ void env_add_builtin(env* e, char* name, sbuiltin func) {
 /* Setting variables */ 
 sval* set_var(env* e, sval* a, char* func) {
 	ERRCHECK_TYPE(func, a, 0, SVAL_QEXPR); 
-
-<<<<<<< HEAD
-	ERRCHECK(a, (symbols->count == a->count - 1), 
-		"Function '%s' was passed too many arguments for symbols. "
-		"Got %i, expecting %i.", func, symbols->count, a->count -1); 
-
-	/* "def" sets global bindings, "=" is a local binding */ 
-	moveFront(S); moveFront(A); moveNext(A); /* Advance A one past S */ 
-=======
+	
 	sval* symbols = a->cell[0]; 
->>>>>>> a475f575bc48c653b402002dc7cd151900f83767
 	for (int i = 0; i < symbols->count; i++) {
 		ERRCHECK(a, (symbols->cell[i]->type == SVAL_SYM),
       "Function '%s' cannot define non-symbol. "
