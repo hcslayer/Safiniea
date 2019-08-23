@@ -12,10 +12,10 @@
  *					[*] First draft done. Need to wring out the bugs. 
  *					[ ] Test expected behavior and document. 
  *			[*] Convert static arrays to linked lists. 
- *			[ ] Convert linked lists back to static arrays 
+ *			[*] Convert linked lists back to static arrays 
  *			[ ] Review how everything actually works. 
  *			[*] Hot comment boxes for everything 
- * 			[ ] Merge this branch with master. 
+ * 			[*] Merge this branch with master. 
  */ 
 
 #include<stdio.h> 
@@ -23,7 +23,6 @@
 #include<stdbool.h>
 #include<math.h> 
 #include"mpc.h" 		/* Deep thanks to orangeduck for inspiration and guidance! */ 
-#include"List.h"
 
 /* Windows-specific configuration */ 
 #ifdef 		_WIN32 
@@ -52,6 +51,16 @@ void add_history(char* sorry_windows_users) {/* space filler */}
 /** Structure types **/
 /*********************/ 
 
+/* Parsers */ 
+mpc_parser_t* Number; 
+mpc_parser_t* Symbol; 
+mpc_parser_t* String; 
+mpc_parser_t* Comment; 
+mpc_parser_t* Sexpr; 
+mpc_parser_t* Qexpr; 
+mpc_parser_t* Expr; 
+mpc_parser_t* CatchAll; 
+
 struct sval; 
 struct env; 
 typedef struct sval sval; 
@@ -62,7 +71,8 @@ typedef sval*(*sbuiltin)(env*, sval*);
 
 /* Sub-types */ 
 typedef enum {
-	SVAL_NUM, SVAL_ERR, SVAL_SYM, SVAL_SEXPR, SVAL_QEXPR, SVAL_FUN
+	SVAL_NUM, SVAL_ERR, SVAL_SYM, SVAL_SEXPR, SVAL_QEXPR, SVAL_FUN,
+	SVAL_BOOL, SVAL_STR  
 } value_type; 
 
 typedef enum {
@@ -77,7 +87,9 @@ char* find_type(value_type t) {
 		case SVAL_SYM: return "Symbol"; 
 		case SVAL_ERR: return "Error"; 
 		case SVAL_SEXPR: return "S-Expression"; 
-		case SVAL_QEXPR: return "Q-Expression"; 
+		case SVAL_QEXPR: return "Q-Expression";
+		case SVAL_BOOL: return "Boolean"; 
+		case SVAL_STR: 	return "String"; 
 		default: return "???"; 
 	}
 }
@@ -116,6 +128,10 @@ typedef struct sval {
 	long num; 
 	char* err; 
 	char* sym; 
+	char* str; 
+
+	/* Boolin' */ 
+	short tval; 
 
 	/* Functions */ 
 	sbuiltin builtin;
@@ -191,9 +207,26 @@ sval* fun(sbuiltin func) {
 	return v; 
 }
 
+/* Boolean */ 
+sval* truthy(short b) {
+	sval* v = malloc(sizeof(sval)); 
+	v->type = SVAL_BOOL; 
+	v->tval = b; 
+	return v; 
+}
+
+/* String */ 
+sval* string(char* s) {
+	sval* v = malloc(sizeof(sval)); 
+	v->type = SVAL_STR; 
+	v->str = malloc(strlen(s)+1); 
+	strcpy(v->str, s); 
+	return v; 
+}
+
 env* new_env(void); 
 
-/* User-defined function (lambda) */ 
+/* Lambda (user-defined fcn) */ 
 sval* lambda(sval* formals, sval* body) {
 	sval* v = malloc(sizeof(sval)); 
 	v->type = SVAL_FUN; 
@@ -227,12 +260,15 @@ env* new_env(void) {
 void free_env(env* e); 
 
 void free_sval(sval* v) {
+	//if (!v) { return; }
 
 	switch(v->type) {
-		case SVAL_NUM: break;  
+		case SVAL_NUM: break;
+		case SVAL_BOOL: break;   
 
 		case SVAL_ERR: free(v->err); break; 
 		case SVAL_SYM: free(v->sym); break; 
+		case SVAL_STR: free(v->str); break; 
 
 		case SVAL_SEXPR: 
 		case SVAL_QEXPR:
@@ -275,6 +311,7 @@ sval* copy_sval(sval* v) {
 	
 	switch(v->type) {
 		case SVAL_NUM: x->num = v->num; break; 
+		case SVAL_BOOL: x->tval = v->tval; break; 
 		
 		/* Copy internal data */ 
 		case SVAL_ERR: 
@@ -285,6 +322,10 @@ sval* copy_sval(sval* v) {
 			x->sym = malloc(strlen(v->sym)+1); 
 			strcpy(x->sym, v->sym); 
 			break; 
+		case SVAL_STR: 
+			x->str = malloc(strlen(v->str)+1); 
+			strcpy(x->str, v->str); 
+			break;
 		
 		/* Copy internal lists/linkage */ 
 		case SVAL_SEXPR:
@@ -330,6 +371,15 @@ sval* sval_compose(sval* v, sval* x) {
 	v->cell = realloc(v->cell, sizeof(sval*) * v->count); 
 	v->cell[v->count-1] = x; 
 	return v; 
+}
+
+sval* sval_join(sval* x, sval* y) {
+	for (int i = 0; i < y->count; i++) {
+		x = sval_compose(x, y->cell[i]); 
+	}
+	free(y->cell); 
+	free(y); 
+	return x; 
 }
 
 /**************************/ 
@@ -391,6 +441,20 @@ sval* read_num(mpc_ast_t* t) {
 		number(x) : error("invalid number"); 
 }
 
+sval* read_str(mpc_ast_t* t) {
+	/* Remove final " character */ 
+	t->contents[strlen(t->contents)-1] = '\0';
+	/* Copy the string, chopping off the leading " */ 
+	char* unesc = malloc(strlen(t->contents+1)+1); 
+	strcpy(unesc, t->contents+1); 
+	/* Pass through the mpc unescape function */ 
+	unesc = mpcf_unescape(unesc); 
+
+	sval* str = string(unesc); 
+	free(unesc); 
+	return str; 
+}
+
 /* MPC reader, parses AST. 
  * Do not confuse t->children with children of values */ 
 sval* sval_read(mpc_ast_t* t) {
@@ -398,6 +462,7 @@ sval* sval_read(mpc_ast_t* t) {
 	/* Convert symbols to the proper type */ 
 	if (strstr(t->tag, "number")) { return read_num(t); }
 	if (strstr(t->tag, "symbol")) { return symbol(t->contents); }
+	if (strstr(t->tag, "string")) { return read_str(t); }
 	
 	/* S-expressions and Q-expressions simply hold more data */ 
 	sval* x = NULL; 
@@ -414,6 +479,7 @@ sval* sval_read(mpc_ast_t* t) {
 		if (strcmp(t->children[i]->contents, "{") == 0) {continue;}
 		if (strcmp(t->children[i]->contents, "}") == 0) {continue;}
 		if (strcmp(t->children[i]->tag,  "regex") == 0) {continue;}
+		if (strstr(t->children[i]->tag, "comment"))			{continue;}
 		//printf("calling sval_compose()\n"); 
 		x = sval_compose(x, sval_read(t->children[i])); 
 	}
@@ -439,13 +505,25 @@ void print_expr(sval* v, char open, char close) {
 	putchar(close); 
 }
 
+void print_str(sval* v) {
+	/* Copy the string */ 
+	char* esc = malloc(strlen(v->str)+1); 
+	strcpy(esc, v->str); 
+	/* Pass through escape function (this replaces all literals with 
+			their escaped equivalents) */ 
+	esc = mpcf_escape(esc); 
+	printf("\"%s\"", esc); 
+	free(esc); 
+}
+
 void print_value(sval* v) {
 	switch (v->type) {
 		case SVAL_NUM: 		printf("%li", v->num); 			  break; 
 		case SVAL_ERR: 		printf("Error: %s", v->err);  break; 
 		case SVAL_SYM: 		printf("%s", v->sym); 			  break; 
-		case SVAL_SEXPR:  print_expr(v, '(', ')'); break; 
-		case SVAL_QEXPR:  print_expr(v, '{', '}'); break; 
+		case SVAL_STR:		print_str(v); 								break; 
+		case SVAL_SEXPR:  print_expr(v, '(', ')'); 			break; 
+		case SVAL_QEXPR:  print_expr(v, '{', '}'); 			break; 
 		case SVAL_FUN: 		
 			if (v->builtin) { printf("<builtin>"); } 
 			else {
@@ -453,6 +531,7 @@ void print_value(sval* v) {
 				putchar(' '); 	print_value(v->body); putchar(')');  
 			}
 			break; 
+		case SVAL_BOOL: 	printf("%s", (v->tval) ? "true" : "false"); break; 
 	}
 }
 
@@ -488,17 +567,6 @@ sval* evaluate(env* e, sval* v) {
 	return v; 
 }
 
-/* Swap: a list helper for evaluate_sexpr */ 
-void swap(List L, sval* x, int i) {
-	int target_index = i;
-	printf("Target index: %d\n", target_index);  
-	insertBefore(L, x); /* insert new element */ 
-	delete(L); /* delete old element at target idx */ 
-	moveFront(L); /* restore cursor position */ 
-	for (int i = 0; i < target_index; i++) {
-		moveNext(L); 
-	}
-}
 
 /* S-expression evaluator; works from inside -> out */  
 sval* evaluate_sexpr(env* e, sval* v) {
@@ -527,10 +595,10 @@ sval* evaluate_sexpr(env* e, sval* v) {
 }
 
 /* Pop : removes an element from the list, leaving the remainder in tact */ 
-sval* pop(sval* v, int i) {
+sval* pop(sval* v, int i) { 
 	sval* x = v->cell[i]; 
 	memmove(&v->cell[i], &v->cell[i+1], 
-		sizeof(sval*) * v->count-i-1); 
+		sizeof(sval*) * (v->count-i-1)); 
 	v->count--;
 	v->cell = realloc(v->cell, sizeof(sval*) * v->count); 
 	return x; 
@@ -554,6 +622,14 @@ long findMax(long x, long y) { return (x > y) ? x : y; }
 
 /* Switchboard for evaluating basic built-ins (+-/*) */
 sval* builtin_op(env* e, sval* a, char* op) {
+	if (strcmp(op, "Exit") == 0) {
+		free_sval(a); free_env(e); 
+		printf("Goodbye!\n"); 
+		/* implement an exit function */ 
+		exit(EXIT_SUCCESS); 
+
+	}
+	
 	for (int i = 0; i < a->count; i++) {
 		ERRCHECK_TYPE(op, a, i, SVAL_NUM); 
 	}
@@ -593,6 +669,77 @@ sval* builtin_op(env* e, sval* a, char* op) {
 	return x;
 }
 
+/* Comp: a comparison operator that generalizes equality */ 
+short compare(sval* x, sval* y) {
+	/* First, run a type check */ 
+	if (x->type != y->type) { return 0; }
+
+	switch (x->type) {
+		case SVAL_BOOL: return (x->tval == y->tval); break; 
+		case SVAL_NUM: 	return (x->num == y->num); break; 
+
+		case SVAL_ERR: return (strcmp(x->err, y->err)); break; 
+		case SVAL_SYM: return (strcmp(x->sym, y->sym)); break;
+		case SVAL_STR: return (strcmp(x->str, y->str)); break;  
+
+		case SVAL_FUN: 
+			if (x->builtin || y->builtin) {
+				return x->builtin == y->builtin; 
+			}
+			else {
+				return compare(x->formals, y->formals) 
+								&& compare(x->body, y->body); 
+			}
+
+		/* Lists need to be compared element-by-element */ 
+		case SVAL_QEXPR: 
+		case SVAL_SEXPR:
+			if (x->count != y->count) { return 0; }
+			for (int i = 0; i < x->count; i++) {
+				if (!compare(x->cell[i], y->cell[i])) {
+					return 0; 
+				}
+			}
+			return 1; 
+			break;	
+	}
+	return 0; /* How did we get here?? */ 
+
+}
+
+sval* builtin_cmp(env* e, sval* a) {
+	ERRCHECK_NUM("===", a, 2); 
+	return truthy(compare(a->cell[0], a->cell[1])); 
+}
+
+sval* builtin_cond(env* e, sval* a, char* op) {
+	//printf("calling conditional..."); 
+	/* verify that two numeric arguments are passed */ 
+	ERRCHECK_NUM(op, a, 2); 
+	ERRCHECK_TYPE(op, a, 0, SVAL_NUM);
+	ERRCHECK_TYPE(op, a, 1, SVAL_NUM); 
+
+	sval* x = pop(a, 0); 
+	sval* y = pop(a, 0);
+	free_sval(a); 
+	sval* result; 
+
+	if (strcmp(op, "==") == 0) { result = truthy((x->num == y->num)); }
+	if (strcmp(op, "!=") == 0) { result = truthy((x->num != y->num)); }
+	if (strcmp(op, "<=") == 0) { result = truthy((x->num <= y->num)); }
+	if (strcmp(op, ">=") == 0) { result = truthy((x->num >= y->num)); } 
+	if (strcmp(op, "<") == 0)  { result = truthy((x->num < y->num)); }
+	if (strcmp(op, ">") == 0)  { result = truthy((x->num > y->num)); }
+	/* else {
+		free_sval(x); free_sval(y); 
+		return error("Unexpected conditional: %s", op); 
+	} */ 
+
+	free_sval(x); free_sval(y); 
+	return result; 
+
+}
+
 /*******************/ 
 /** Q-Expressions **/ 
 /*******************/ 
@@ -621,29 +768,39 @@ sval* builtin_tail(env* e, sval* a) {
 
 /* List: converts a Q-Expr to an S-Expr */ 
 sval* builtin_list(env* e, sval* a) {
-	a->type = SVAL_QEXPR; 
+	a->type = SVAL_SEXPR; 
 	return a; 
 }
 
-/* Join: composes multiple Q-expressions */ 
-sval* join_helper(sval* x, sval* y) {
-	for (int i = 0; i < y->count; i++) {
-		x = sval_compose(x, y->cell[i]); 
-	}
+/* String concat helper */ 
+sval* join_str(sval* x, sval* y) {
+	x->str = realloc(x->str, strlen(x->str)+strlen(y->str)+1); 
+	strcat(x->str, y->str); 
 	/* Discard 'y' */ 
 	free_sval(y); 
 	return x; 
 }
 
+/* Join: Composes Q-expressions and strings */ 
 sval* builtin_join(env* e, sval* a) {
+	/* Parse first argument to determine type */ 
+	value_type t; 
+	if (a->count && a->cell[0]->type == SVAL_QEXPR) {
+		t = SVAL_QEXPR;
+	} else { t = SVAL_STR; }
+	
+	/* Verify that arguments are correct */ 
 	for (int i = 0; i < a->count; i++) {
-		ERRCHECK_TYPE("join", a, i, SVAL_QEXPR); 
+		ERRCHECK_TYPE("join", a, i, t); 	 
 	}
+
 	sval* x = pop(a, 0); 
 	while (a->count) {
 		sval* y = pop(a, 0); 
-		x = join_helper(x, y); 
+		if (t == SVAL_QEXPR) { x = sval_join(x, y); }
+		else { x = join_str(x, y); }
 	}
+
 	free_sval(a); 
 	return x; 
 }
@@ -656,6 +813,36 @@ sval* builtin_eval(env* e, sval* a) {
 	sval* x = take(a, 0); 
 	x->type = SVAL_SEXPR; 
 	return evaluate(e, x); 
+}
+
+/* If: a ternary-sort of operator */ 
+sval* builtin_if(env* e, sval* a) {
+	/* Expects 3 sexpr args */ 
+	ERRCHECK_NUM("!if", a, 3); 
+	for (int i = 0; i < 3; i++) {
+		ERRCHECK_TYPE("!if", a, i, SVAL_QEXPR); 
+	}
+
+	for (int i = 0; i < 3; i++) {
+		print_valueln(a->cell[i]); 
+	}
+
+	for (int i = 0; i < 3; i++) {
+		/* make each path executible */ 
+		a->cell[i]->type = SVAL_SEXPR; 
+	}
+
+	sval* cond = evaluate(e, pop(a, 0));
+	sval* then;  
+	if (cond->tval) {
+		then = pop(a, 0); 
+	} else {
+		then = pop(a, 1); 
+	}
+
+	free_sval(cond); 
+	free_sval(a); 
+	return evaluate(e, then); 
 }
 
 /*********************************/ 
@@ -671,7 +858,16 @@ sval* builtin_pow(env* e, sval* a) {  return builtin_op(e, a, "^"); }
 sval* builtin_max(env* e, sval* a) {  return builtin_op(e, a, "max"); }
 sval* builtin_min(env* e, sval* a) {  return builtin_op(e, a, "min"); }
 sval* builtin_mod(env* e, sval* a) {  return builtin_op(e, a, "%"); }
-sval* builtin_exit(env* e, sval* a) { return builtin_op(e, a, "exit"); } 
+sval* builtin_exit(env* e, sval* a) { return builtin_op(e, a, "Exit"); }
+
+/* Register conditional functions with ENV */ 
+sval* builtin_eq(env* e, sval* a) { return builtin_cond(e, a, "=="); }
+sval* builtin_neq(env* e, sval* a) { return builtin_cond(e, a, "!="); }
+sval* builtin_geq(env* e, sval* a) { return builtin_cond(e, a, ">="); }
+sval* builtin_leq(env* e, sval* a) { return builtin_cond(e, a, "<="); }
+sval* builtin_less(env* e, sval* a) { return builtin_cond(e, a, "<"); }
+sval* builtin_more(env* e, sval* a) { return builtin_cond(e, a, ">"); } 
+
 
 void env_add_builtin(env* e, char* name, sbuiltin func) {
 	sval* k = symbol(name); 
@@ -755,16 +951,19 @@ sval* call(env* e, sval* f, sval* a) {
 		sval* symbol = pop(f->formals, 0); 
 
 		/* Variable argument definition */ 
-		if (strcmp(symbol->sym, "...") == 0) { 
+		if (strcmp(symbol->sym, "~") == 0) { 
+			
 			if (f->formals->count != 1) {
 				free_sval(a); 
 				return error("Variable Argument definition invalid. "
-					"'...' is to be followed by a single symbol. "); 
+					"'~' is to be followed by a single symbol. "); 
 			}
+			
 			/* next formal is set to remaining arguments */ 
 			sval* nsym = pop(f->formals, 0); 
 			set_env(f->env, nsym, builtin_list(e, a)); 
-			free_sval(symbol); free_sval(nsym); 
+			free_sval(symbol); free_sval(nsym);
+			break; 
 		}
 
 		/* Standard definition */ 
@@ -778,12 +977,12 @@ sval* call(env* e, sval* f, sval* a) {
 
 	/* If VA symbols remain, bind to an empty list */ 
 	if (f->formals->count > 0 
-		&& strcmp(f->formals->cell[0]->sym, "...") == 0) {
+		&& strcmp(f->formals->cell[0]->sym, "~") == 0) {
 
 		/* verify that '...' doesn't stand alone */ 
 		if (f->formals->count != 2) {
 			return error("Function definition invalid. "
-				"'...' must be followed by a single symbol."); 
+				"'~' must be followed by a single symbol."); 
 		}
 
 		/* pop and delete '...' */ 
@@ -812,13 +1011,82 @@ sval* call(env* e, sval* f, sval* a) {
 
 /* Put and define register values to the local or global namespace */ 
 sval* builtin_def(env* e, sval* a) {
-	printf("Calling def\n");
+	//printf("Calling def\n");
 	return set_var(e, a, "def");
 }
 
 sval* builtin_put(env* e, sval* a) {
 	return set_var(e, a, "="); 
 }
+
+/* Loading files */ 
+sval* builtin_load(env* e, sval* a) {
+	ERRCHECK_NUM("load", a, 1); 
+	ERRCHECK_TYPE("load", a, 0, SVAL_STR); 
+
+	/* Parse file given by string name */ 
+	mpc_result_t r; 
+	if (mpc_parse_contents(a->cell[0]->str, CatchAll, &r)) {
+
+		/* read */ 
+		mpc_ast_print(r.output); 
+		sval* expr = sval_read(r.output); 
+		mpc_ast_delete(r.output); 
+
+		/* evaluate */ 
+		while (expr->count) {
+			sval* x = evaluate(e, pop(expr, 0)); 
+
+			/* print any errors */ 
+			if (x->type == SVAL_ERR) {
+				print_valueln(x); 
+			}
+			free_sval(x); 
+		}
+		
+		/* clean up */ 
+		free_sval(expr); free_sval(a); 
+
+		/* return () as confirmation */ 
+		return sexpr(); 
+	} 
+	
+	/* parse error */ 
+	else {
+		char* err_msg = mpc_err_string(r.error); 
+		mpc_err_delete(r.error); 
+		sval* read_err = error("Could not load module %s", err_msg); 
+		free(err_msg); 
+		free_sval(a); 
+
+		/* return err */ 
+		return read_err; 
+	}
+	
+}
+
+/* Print: prints argument list to the console */ 
+sval* builtin_print(env* e, sval* a) {
+	for (int i = 0; i < a->count; i++) {
+		print_value(a->cell[i]); putchar(' '); 
+	}
+	putchar('\n'); 
+	free_sval(a); 
+
+	return sexpr(); 
+}
+
+/* Error: enables the user to build exceptions */ 
+sval* builtin_err(env* e, sval* a) {
+	ERRCHECK_NUM("error", a, 1); 
+	ERRCHECK_TYPE("error", a, 0, SVAL_STR); 
+
+	sval* err = error(a->cell[0]->str); 
+
+	free_sval(a); 
+	return err; 
+}
+
 
 /* Configures the environment with standard functionality */ 
 void env_configure(env* e) {
@@ -827,6 +1095,11 @@ void env_configure(env* e) {
 	env_add_builtin(e, "tail", builtin_tail);
 	env_add_builtin(e, "eval", builtin_eval);
 	env_add_builtin(e, "join", builtin_join);
+	env_add_builtin(e, "!if", builtin_if); 
+	env_add_builtin(e, "===", builtin_cmp);
+	env_add_builtin(e, "print", builtin_print);
+	env_add_builtin(e, "load", builtin_load);  
+	env_add_builtin(e, "error", builtin_err);  
 
 	env_add_builtin(e, "+", builtin_add);
 	env_add_builtin(e, "-", builtin_sub);
@@ -836,13 +1109,19 @@ void env_configure(env* e) {
   env_add_builtin(e, "min", builtin_min);
 	env_add_builtin(e, "^", builtin_pow);
 	env_add_builtin(e, "%", builtin_mod);
-	env_add_builtin(e, "exit", builtin_exit); 
+	env_add_builtin(e, "Exit", builtin_exit); 
+
+	env_add_builtin(e, "==", builtin_eq); 
+	env_add_builtin(e, "!=", builtin_neq); 
+	env_add_builtin(e, "<=", builtin_leq); 
+	env_add_builtin(e, ">=", builtin_geq); 
+	env_add_builtin(e, "<", builtin_less); 
+	env_add_builtin(e, ">", builtin_more); 
 
 	env_add_builtin(e, "def", builtin_def); 
 	env_add_builtin(e, "\\", builtin_lambda); 
 	env_add_builtin(e, "=", builtin_put); 
 }
-
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -850,24 +1129,29 @@ void env_configure(env* e) {
 int main(int argc, char* argv[]) {
 
 	/* Parsers */ 
-	mpc_parser_t* Number 	= mpc_new("number"); 
-	mpc_parser_t* Symbol  = mpc_new("symbol"); 
-	mpc_parser_t* Sexpr		= mpc_new("sexpr"); 
-	mpc_parser_t* Qexpr 	= mpc_new("qexpr"); 
-	mpc_parser_t* Expr 		= mpc_new("expr"); 
-	mpc_parser_t* Cue			= mpc_new("cue"); 
+	Number 	 = mpc_new("number"); 
+	Symbol   = mpc_new("symbol"); 
+	String   = mpc_new("string"); 
+	Comment  = mpc_new("comment"); 
+	Sexpr		 = mpc_new("sexpr"); 
+	Qexpr 	 = mpc_new("qexpr"); 
+	Expr 		 = mpc_new("expr"); 
+	CatchAll = mpc_new("catchall"); 
 
 	/* Grammars */ 
 	mpca_lang(MPCA_LANG_DEFAULT, 
 	"																			   							 \
 		number   : /-?[0-9]+/ ; 							 							 \
-		symbol   : /[a-zA-Z0-9_+\\-*\\/\\\\=<>%!&]+/ ;				\
+		symbol   : /[a-zA-Z0-9_+\\-*\\/\\\\=<>%!&~]+/ ;			 \
+		string   : /\"(\\\\.|[^\"])*\"/ ; 									 \
+		comment  : /::[^\\r\\n]*/	;													 \
 	  sexpr    : '(' <expr>* ')' ; 												 \
 	  qexpr 	 : '{' <expr>* '}' ; 												 \
-		expr 		 : <number> | <symbol> | <sexpr> | <qexpr> ; \
-		cue      : /^/ <expr>* /$/ ; 												 \
+		expr 		 : <number> | <symbol> | <sexpr> |					 \
+							 <string> | <comment>|  <qexpr> ; 				 \
+		catchall : /^/ <expr>* /$/ ; 												 \
 		", 
-		Number, Symbol, Sexpr, Qexpr, Expr, Cue);   
+		Number, Symbol, String, Comment, Sexpr, Qexpr, Expr, CatchAll);   
 
 	/* Version, exit information */ 
 	puts("Safiniea Version 0.2.0"); 
@@ -877,35 +1161,57 @@ int main(int argc, char* argv[]) {
 	env* e = new_env(); 
 	env_configure(e); 
 
-	/* REPL */ 
-	while (true) {
+	/* Check for load files */ 
+	if (argc >= 2) {
 
-		char* input = readline("\n∞ > ");
-		add_history(input);
+		/* Evaluate each filename provided */ 
+		for (int i = 1; i < argc; i++) {
 
-		/* Parse user input */ 
-		mpc_result_t r; 
-		if (mpc_parse("<stdin>", input, Cue, &r)) {
-			/* Diagnostic: print AST */ 
-			mpc_ast_print(r.output);
-			sval* x = evaluate(e, sval_read(r.output)); 
-			print_valueln(x);
+			/* Pass the filename into a S-expression */ 
+			sval* args = sval_compose(sexpr(), string(argv[i])); 
+
+			/* Pass to builtin_load and evaluate */ 
+			sval* x = builtin_load(e, args); 
+
+			/* Report any load errors */ 
+			if (x->type == SVAL_ERR) {
+				print_valueln(x); 
+			}
+
 			free_sval(x); 
-			mpc_ast_delete(r.output); 
-		} 
-		/* Parsing error */ 
-		else {
-			mpc_err_print(r.error); 
-			mpc_err_delete(r.error); 
+		}
+	} 
+	else { 
+		/* REPL */ 
+		while (true) {
+
+			char* input = readline("\n∞ > ");
+			add_history(input);
+
+			/* Parse user input */ 
+			mpc_result_t r; 
+			if (mpc_parse("<stdin>", input, CatchAll, &r)) {
+				/* Diagnostic: print AST */ 
+				mpc_ast_print(r.output);
+				sval* x = evaluate(e, sval_read(r.output)); 
+				print_valueln(x);
+				free_sval(x); 
+				mpc_ast_delete(r.output); 
+			} 
+			/* Parsing error */ 
+			else {
+				mpc_err_print(r.error); 
+				mpc_err_delete(r.error); 
+			}
+
+			free(input); 
 		}
 
-		free(input); 
+		/* Clean up */ 
+		free_env(e); 
+		mpc_cleanup(8, Number, String, Comment,
+		String, Sexpr, Qexpr, Expr, CatchAll); 
 	}
-
-	/* Clean up */ 
-	free_env(e); 
-	mpc_cleanup(6, Number, Symbol, Sexpr, Qexpr, Expr, Cue); 
-
 	exit(EXIT_SUCCESS); 
 }
 

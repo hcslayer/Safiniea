@@ -28,4 +28,4 @@
 # 	$(MEMCHECK) $(CLIENT)
 
 do: 
-	gcc -std=c99 -Wall safiniea.c mpc.c List.c -ledit -lm -o prompt
+	gcc -std=c99 -Wall safiniea.c mpc.c -ledit -lm -o prompt
