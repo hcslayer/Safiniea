@@ -4,6 +4,17 @@
 
 ## Project Overview 
 
+> [Quick Start Guide](#quick-start-guide)  
+> [Example Code](#example-code)  
+> [Arithmetic](#arithmetic)
+> [Built-In Functionality](#built-in-functions)  
+> [Standard Library](#standard-library)  
+> [Bindings](#bindings)  
+> [Conditionals](#conditionals-and-comparisons)  
+> [Strings](#strings)  
+> [Loading Code](#loading-files)  
+
+
 This project is based on orangeduck's fantastic [buildyourownlisp][r1]. My hope was to build a fun, flavorful little programming language in C. 
 
 Safiniea is based on a small core of data types and operations: numbers (integers), strings, executibles (S-Expressions), non-executibles (Q-Expressions), errors, and booleans. This is nowhere near a production class language, but it has dignity and spunk, and it was a true joy to build. 
@@ -24,7 +35,7 @@ All strings must be enclosed in double inverted commas `""`.
 
 Comments begin with double colons `::` and are terminated by the first newline character encountered.  
 
-##### A quick note about syntax 
+#### A quick note about syntax 
 
 Safiniea uses reverse Polish syntax for all operations. It may be a bit unfamiliar at the onset, but I've found that it wears well. For the user unfamiliar with reverse Polish syntax, the general gist is that `<op1> <operator> <op2>` becomes `<operator> <op1> <op2> ...`
 
@@ -116,7 +127,7 @@ false
 
 ---
 
-##### Arithmetic 
+#### Arithmetic 
 
 Safiniea currently has a single numeric data type: the humble integer. 
 Safiniea supports addition, subtraction, multiplication, division, etc. 
@@ -129,7 +140,7 @@ Most arithmetic in Safiniea is relatively intuitive. Zero division throws errors
 
 ---
 
-##### Built-In Functions  
+#### Built In Functions  
 The following functions are hard-coded into the program itself. The standard library builds on this core set of builtins.
 
 `function name` : description goes here 
@@ -164,7 +175,7 @@ The following functions are hard-coded into the program itself. The standard lib
 
 ---
 
-##### Standard Library 
+#### Standard Library 
 
 The standard library, which is obtained by doing `load "stdlib.saf"` adds some additional quirky functions, about a third of which are actually useful! A quick summary of these follows, though the reader is encouraged to explore the stdlib functions *not* included on this list. 
 
@@ -185,7 +196,7 @@ The standard library, which is obtained by doing `load "stdlib.saf"` adds some a
 
 ---
 
-##### Bindings 
+#### Bindings 
 
 
 There's two ways to define a binding (or a variable) in this language, based on what scope you want to shoot it to. 
@@ -208,7 +219,7 @@ In either case, bindings persist for the duration of the program, and can be upd
 
 ---
 
-##### Conditionals / Comparisons  
+#### Conditionals and Comparisons  
 
 Safiniea supports a boolean type, but it's a bit more of an internal feature at the present moment. Soon, literal `true` and `false` values will be supported, but for now, the only way to get those values is by using some combination of `===, ==, !=, <, >, <= ...`
 
@@ -218,35 +229,30 @@ The rest of our friends, `> < != == <= >=`, operate as expected. Note that unlik
 
 ---
 
-##### Strings 
+#### Strings 
 
-Strings are any content enclosed in `"..."`. At the present, strings can be `join`ed and `print`ed. `print` simply returns the string to stdout, and `join` concatenates two (or more) strings and returns the result. 
-
----
-
-##### Partial Function Definition
-
-This is a neat feature of the language, see if you can figure out how it works... 
+Strings are any content enclosed in `"..."`. At the present, strings can be `join`-ed and `print`-ed. `print` simply returns the string to stdout, and `join` concatenates two (or more) strings and returns the result. 
 
 ---
 
-##### Loading Files 
+#### Partial Function Definition
 
-You can write Safiniea code and load it. Simply follow the `./prompt` command with the file(s) that you want to run. 
+This is a neat feature of the language. See if you can figure out how it works... 
+
+---
+
+#### Loading Files 
+
+If you aren't digging the command prompt, you can write Safiniea code and load it. Simply follow the `./prompt` command with the file(s) that you want to run. 
+A couple of sample programs have been included to illustrate what this would actually look like. 
 
 It's important to note that any statement you write in `.saf` code must be wrapped in `(...)`, otherwise wild errors abound. Comments, as mentioned earlier, span a single line and are denoted by `::`.
 
 Other than these two guidelines, type away! I'm confident that you'll discover bugs I never did, or ways to break the language. *Honestly, please do*.   
 
----
-
-## Under the Hood 
-
-Coming soon. 
-
 --- 
 
-## Development Bits 
+## Dev Bits
 
 #### Current Bugs 
 
