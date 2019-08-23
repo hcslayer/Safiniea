@@ -765,9 +765,9 @@ sval* builtin_tail(env* e, sval* a) {
 	return v; 
 }
 
-/* List: converts a Q-Expr to an S-Expr */ 
+/* List: converts args to a Q-Expr */ 
 sval* builtin_list(env* e, sval* a) {
-	a->type = SVAL_SEXPR; 
+	a->type = SVAL_QEXPR; 
 	return a; 
 }
 

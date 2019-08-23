@@ -84,4 +84,3 @@
 	{join (list (f (fst l))) (forEach f (tail l))}
 })
 
-:: note to self -> need to fix the join function. 
